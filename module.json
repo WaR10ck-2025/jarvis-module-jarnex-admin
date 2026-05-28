@@ -1,0 +1,25 @@
+{
+  "module_id": "jarnex-admin",
+  "name": "Jarnex Outdoor Cam Manager",
+  "version": "0.1.0",
+  "description": "Jarnex Outdoor Porch-Light-Cams (JNOL4 / Tuya-OEM-Substrate) im LAN entdecken und verwalten. Dual-Backend: tuya-lan (default), tuya-cloud (Event-Fallback), rtsp (post-OpenIPC). Light/PTZ/Siren-Commands, AI-Person-Events, optional Frigate-Provision bei verfuegbarem RTSP-Stream.",
+  "icon": "fa-lightbulb",
+  "author": "JARVIS",
+  "category": "security",
+  "ui": true,
+  "type": "admin",
+  "min_api_version": "1.0.0",
+  "dependencies": [],
+  "optional_dependencies": ["frigate"],
+  "dep_hint": "Standalone lauffaehig. Tuya-LAN als Default-Backend, Cloud-Fallback nach 3 LAN-Errors mit 5min-Cooldown. Wenn frigate-Modul installiert UND Cam einen RTSP-Stream liefert (nach OpenIPC-Replace oder Stock-ONVIF), wird Frigate-Bridge aktiv.",
+  "provides": ["jarnex-cam-management", "porch-light-control", "ptz-control", "jarnex-ai-alarm-events"],
+  "auth_provider": false,
+  "resources": {
+    "vm": false,
+    "vcpu": 0.5,
+    "ram_mb": 128,
+    "disk_gb": 1,
+    "network_ports": [],
+    "notes": "Laeuft im jarvis-admin-Prozess auf VM 155, kein eigener Container. Discovery scannt Tuya-UDP-Broadcast 6666/6667 + TCP-Probe 554/8000/6668. Cloud-Backend braucht Tuya-IoT-Project-Key in settings."
+  }
+}

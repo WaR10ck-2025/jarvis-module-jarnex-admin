@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jarnex Outdoor Cam Manager</title>
+<style>
+:root {
+  --bg: #0f1419;
+  --panel: #1a1f2e;
+  --panel2: #232938;
+  --border: #2d3548;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #4fc3f7;
+  --ok: #4caf50;
+  --warn: #ff9800;
+  --err: #f44336;
+  --backend-lan: #4fc3f7;
+  --backend-cloud: #ff9800;
+  --backend-rtsp: #4caf50;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+header {
+  padding: 16px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+header h1 { margin: 0; font-size: 18px; }
+.health-pill {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: var(--panel2);
+}
+.health-pill.ok { color: var(--ok); }
+.health-pill.degraded { color: var(--warn); }
+main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+section h2 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.stat {
+  background: var(--panel2);
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+}
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.stat-value { font-size: 20px; margin-top: 4px; }
+button {
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #062032;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, select {
+  padding: 6px 10px;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+}
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+th { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.backend-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.backend-badge.tuya_lan { background: rgba(79,195,247,0.15); color: var(--backend-lan); }
+.backend-badge.tuya_cloud { background: rgba(255,152,0,0.15); color: var(--backend-cloud); }
+.backend-badge.rtsp { background: rgba(76,175,80,0.15); color: var(--backend-rtsp); }
+.empty-state { color: var(--muted); padding: 20px; text-align: center; }
+.muted { color: var(--muted); }
+pre {
+  background: #0a0d12;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Jarnex Outdoor Cam Manager</h1>
+  <span id="health-pill" class="health-pill">…</span>
+  <span class="muted" id="version-pill"></span>
+</header>
+
+<main>
+
+<section>
+  <h2>Status</h2>
+  <div class="grid" id="status-grid">
+    <div class="stat"><div class="stat-label">Cams gesamt</div><div class="stat-value" id="stat-count">…</div></div>
+    <div class="stat" style="border-left-color: var(--backend-lan)"><div class="stat-label">Tuya-LAN</div><div class="stat-value" id="stat-lan">…</div></div>
+    <div class="stat" style="border-left-color: var(--backend-cloud)"><div class="stat-label">Tuya-Cloud</div><div class="stat-value" id="stat-cloud">…</div></div>
+    <div class="stat" style="border-left-color: var(--backend-rtsp)"><div class="stat-label">RTSP</div><div class="stat-value" id="stat-rtsp">…</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Discovery</h2>
+  <div class="row">
+    <input id="cidr-input" type="text" value="192.168.10.0/24" style="min-width: 200px" />
+    <input id="timeout-input" type="number" value="1.5" step="0.1" style="width: 80px" title="Timeout (s)" />
+    <button onclick="runDiscover()">Scan</button>
+    <span class="muted" id="discover-status"></span>
+  </div>
+  <div id="discover-results" style="margin-top: 12px"></div>
+</section>
+
+<section>
+  <h2>Cameras</h2>
+  <div id="cameras-list">
+    <div class="empty-state">Lade Cams…</div>
+  </div>
+</section>
+
+<section>
+  <h2>Alarm-Listener</h2>
+  <div class="row">
+    <button onclick="alarmsStart()">Start</button>
+    <button class="secondary" onclick="alarmsStop()">Stop</button>
+    <button class="secondary" onclick="refreshAlarmStatus()">Refresh</button>
+    <span class="muted" id="alarms-status-text"></span>
+  </div>
+  <pre id="alarms-status-json" style="margin-top: 12px"></pre>
+</section>
+
+<section>
+  <h2>Recent Events</h2>
+  <button class="secondary" onclick="refreshEvents()">Refresh</button>
+  <div id="events-list" style="margin-top: 12px"></div>
+</section>
+
+</main>
+
+<script>
+const API_BASE = window.location.pathname.replace(/\/ui\/?.*$/, '/api');
+
+async function api(path, opts = {}) {
+  const url = API_BASE + path;
+  const resp = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`HTTP ${resp.status}: ${txt}`);
+  }
+  if (resp.headers.get('content-type')?.includes('application/json')) {
+    return await resp.json();
+  }
+  return await resp.text();
+}
+
+async function loadHealth() {
+  try {
+    const h = await api('/health');
+    const pill = document.getElementById('health-pill');
+    pill.textContent = h.status;
+    pill.className = 'health-pill ' + h.status;
+    document.getElementById('version-pill').textContent = 'v' + h.version;
+    document.getElementById('stat-count').textContent = h.camera_count;
+    document.getElementById('stat-lan').textContent = h.backends.tuya_lan || 0;
+    document.getElementById('stat-cloud').textContent = h.backends.tuya_cloud || 0;
+    document.getElementById('stat-rtsp').textContent = h.backends.rtsp || 0;
+  } catch (e) {
+    document.getElementById('health-pill').textContent = 'error';
+    document.getElementById('health-pill').className = 'health-pill degraded';
+  }
+}
+
+async function loadCameras() {
+  const list = document.getElementById('cameras-list');
+  try {
+    const data = await api('/cameras?include_summary=true');
+    if (!data.cameras.length) {
+      list.innerHTML = '<div class="empty-state">Keine Cameras hinterlegt. Discovery starten und Cam hinzufuegen.</div>';
+      return;
+    }
+    let html = '<table><thead><tr>';
+    html += '<th>ID</th><th>Name</th><th>Host</th><th>Backend</th><th>Stream</th><th>Aktionen</th>';
+    html += '</tr></thead><tbody>';
+    for (const cam of data.cameras) {
+      const backend = cam.backend || 'tuya_lan';
+      const stream = cam.stream_url ? '<span style="color: var(--ok)">RTSP</span>' : '<span class="muted">-</span>';
+      html += `<tr>
+        <td>${cam.id}</td>
+        <td>${cam.name}</td>
+        <td>${cam.host}</td>
+        <td><span class="backend-badge ${backend}">${backend}</span></td>
+        <td>${stream}</td>
+        <td>
+          <button class="secondary" onclick="cmdLight(${cam.id}, true)">Licht an</button>
+          <button class="secondary" onclick="cmdLight(${cam.id}, false)">Licht aus</button>
+          <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
+          <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
+          <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
+          <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    list.innerHTML = html;
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state">Fehler: ${e.message}</div>`;
+  }
+}
+
+async function runDiscover() {
+  const cidr = document.getElementById('cidr-input').value;
+  const timeout_s = parseFloat(document.getElementById('timeout-input').value);
+  const status = document.getElementById('discover-status');
+  const results = document.getElementById('discover-results');
+  status.textContent = 'Scanne…';
+  results.innerHTML = '';
+  try {
+    const data = await api('/discover', {
+      method: 'POST',
+      body: JSON.stringify({ cidr, timeout_s }),
+    });
+    status.textContent = `${data.total} Hosts, ${data.jarnex_likely_count} jarnex-likely`;
+    if (!data.candidates.length) {
+      results.innerHTML = '<div class="empty-state">Keine Hosts gefunden.</div>';
+      return;
+    }
+    let html = '<table><thead><tr>';
+    html += '<th>IP</th><th>Ports</th><th>Backend-Hint</th><th>Score</th>';
+    html += '</tr></thead><tbody>';
+    for (const c of data.candidates) {
+      html += `<tr>
+        <td>${c.ip}</td>
+        <td>${(c.open_ports || []).join(', ')}</td>
+        <td><span class="backend-badge ${c.likely_backend === 'tuya_lan' || c.likely_backend === 'tuya_with_rtsp' ? 'tuya_lan' : (c.likely_backend === 'rtsp' ? 'rtsp' : '')}">${c.likely_backend}</span></td>
+        <td>${c.score}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    results.innerHTML = html;
+  } catch (e) {
+    status.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+async function cmdLight(camId, on) {
+  try {
+    await api(`/cameras/${camId}/light`, {
+      method: 'POST',
+      body: JSON.stringify({ on, brightness: on ? 80 : null }),
+    });
+    alert(`Cam ${camId}: Licht ${on ? 'AN' : 'AUS'}`);
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdPtz(camId, op) {
+  try {
+    await api(`/cameras/${camId}/ptz`, {
+      method: 'POST',
+      body: JSON.stringify({ op, duration_s: 1.0 }),
+    });
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdSnapshot(camId) {
+  window.open(`${API_BASE}/cameras/${camId}/snapshot`, '_blank');
+}
+
+async function cmdCaps(camId) {
+  try {
+    const data = await api(`/cameras/${camId}/capabilities?refresh=true`);
+    alert(JSON.stringify(data.summary, null, 2));
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function alarmsStart() {
+  try {
+    await api('/alarms/start', { method: 'POST' });
+    refreshAlarmStatus();
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function alarmsStop() {
+  try {
+    await api('/alarms/stop', { method: 'POST' });
+    refreshAlarmStatus();
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function refreshAlarmStatus() {
+  try {
+    const s = await api('/alarms/status');
+    document.getElementById('alarms-status-text').textContent =
+      `Running: ${s.running}, Tasks: ${s.active_tasks}, Events: ${s.events_total}, Errors: ${s.errors_total}, Cloud-Fallbacks: ${s.cloud_fallbacks}`;
+    document.getElementById('alarms-status-json').textContent = JSON.stringify(s, null, 2);
+  } catch (e) {
+    document.getElementById('alarms-status-text').textContent = 'Fehler: ' + e.message;
+  }
+}
+
+async function refreshEvents() {
+  const list = document.getElementById('events-list');
+  try {
+    const data = await api('/alarms/recent?limit=20');
+    if (!data.events.length) {
+      list.innerHTML = '<div class="empty-state">Keine Events.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>Zeit</th><th>Cam</th><th>Label</th><th>Backend</th><th>Score</th></tr></thead><tbody>';
+    for (const ev of data.events) {
+      html += `<tr>
+        <td>${new Date(ev.ts * 1000).toLocaleString()}</td>
+        <td>${ev.cam_id}</td>
+        <td><strong>${ev.label}</strong></td>
+        <td><span class="backend-badge ${ev.source_backend}">${ev.source_backend}</span></td>
+        <td>${ev.score ?? '-'}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    list.innerHTML = html;
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state">Fehler: ${e.message}</div>`;
+  }
+}
+
+loadHealth();
+loadCameras();
+refreshAlarmStatus();
+refreshEvents();
+</script>
+</body>
+</html>

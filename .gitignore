@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Data + Secrets
+data.db
+data.db-journal
+*.local_key
+*.access_id
+*.access_key
+secrets.env
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Test-Artefakte
+tests/screenshots/
+
+# Build artefacts
+*.tar.gz
+*.egg-info/
+dist/
+build/
