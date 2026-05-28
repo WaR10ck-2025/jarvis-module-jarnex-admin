@@ -16,7 +16,7 @@
   "auth_provider": false,
   "resources": {
     "vm": false,
-    "vcpu": 0.5,
+    "vcpu": 1,
     "ram_mb": 128,
     "disk_gb": 1,
     "network_ports": [],
