@@ -39,7 +39,8 @@ async def test_login_without_local_key_raises():
 
 @pytest.mark.asyncio
 async def test_get_state_maps_dps_to_high_level_keys():
-    transport = FakeTuyaTransport(initial_dps={1: True, 22: 60, 102: True})
+    # DP-Map nach Smart-Cam-Convention: light=138, brightness=123, motion=107
+    transport = FakeTuyaTransport(initial_dps={138: True, 123: 60, 107: True})
     backend = _build(transport)
     state = await backend.get_state()
     assert state["light_on"] is True
@@ -52,8 +53,8 @@ async def test_set_light_on_with_brightness():
     transport = FakeTuyaTransport()
     backend = _build(transport)
     await backend.set_light(on=True, brightness=80)
-    assert ("set_value", {"dp": 1, "value": True}) in transport.call_log
-    assert ("set_value", {"dp": 22, "value": 80}) in transport.call_log
+    assert ("set_value", {"dp": 138, "value": True}) in transport.call_log
+    assert ("set_value", {"dp": 123, "value": 80}) in transport.call_log
 
 
 @pytest.mark.asyncio
@@ -61,8 +62,8 @@ async def test_set_light_brightness_clamped():
     transport = FakeTuyaTransport()
     backend = _build(transport)
     await backend.set_light(on=True, brightness=999)
-    # Letzter set_value-Call muss brightness=100 sein (clamped)
-    calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 22]
+    # Letzter set_value-Call muss brightness=100 sein (clamped), DP 123 = ipc_bright
+    calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 123]
     assert calls[-1][1]["value"] == 100
 
 
@@ -88,10 +89,18 @@ async def test_ptz_left_with_duration_sends_stop():
     result = await backend.ptz("left", duration_s=0.01)  # kurz
     assert "move" in result
     assert "stop" in result
-    # ptz_direction DP=101, dann nochmal mit stop
-    ptz_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 101]
-    assert ptz_calls[0][1]["value"] == "left"
-    assert ptz_calls[-1][1]["value"] == "stop"
+    # ptz_control DP=119, Tuya-Enum: "3" = left
+    ptz_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 119]
+    assert ptz_calls[0][1]["value"] == "3"  # PTZ_ENUM_MAP["left"]
+    # Stop kommt ueber ptz_stop (DP 151, Boolean True) ODER ptz_control "0"
+    stop_calls = [
+        c for c in transport.call_log
+        if c[0] == "set_value" and (
+            (c[1]["dp"] == 151 and c[1]["value"] is True)
+            or (c[1]["dp"] == 119 and c[1]["value"] == "0")
+        )
+    ]
+    assert stop_calls, "ein Stop-Call muss kommen (ptz_stop=True oder ptz_control=0)"
 
 
 @pytest.mark.asyncio
@@ -99,7 +108,8 @@ async def test_trigger_siren():
     transport = FakeTuyaTransport()
     backend = _build(transport)
     await backend.trigger_siren()
-    siren_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 104]
+    # siren_switch ist DP 134
+    siren_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 134]
     assert siren_calls[0][1]["value"] is True
 
 
@@ -112,14 +122,17 @@ async def test_get_snapshot_lan_not_supported():
 
 @pytest.mark.asyncio
 async def test_poll_events_edge_triggered_motion():
-    transport = FakeTuyaTransport(initial_dps={109: False, 110: False})
+    # DP-IDs aus DEFAULT_DP_MAP holen statt hardcoded — Test ist robust gegen Map-Changes
+    motion_dp = DEFAULT_DP_MAP["motion_event"]
+    ai_dp = DEFAULT_DP_MAP["ai_person_event"]
+    transport = FakeTuyaTransport(initial_dps={motion_dp: False, ai_dp: False})
     backend = _build(transport)
     # 1. Poll: keine Events (state = idle)
     events = await backend.poll_events()
     assert events == []
 
     # 2. Trigger motion event
-    transport.set_dp(109, True)
+    transport.set_dp(motion_dp, True)
     events = await backend.poll_events()
     assert len(events) == 1
     assert events[0].label == "motion"
@@ -130,10 +143,10 @@ async def test_poll_events_edge_triggered_motion():
     assert events == []
 
     # 4. State faellt zurueck
-    transport.set_dp(109, False)
+    transport.set_dp(motion_dp, False)
     await backend.poll_events()
     # 5. State steigt erneut -> erneut Event
-    transport.set_dp(109, True)
+    transport.set_dp(motion_dp, True)
     events = await backend.poll_events()
     assert len(events) == 1
     assert events[0].label == "motion"
@@ -141,12 +154,14 @@ async def test_poll_events_edge_triggered_motion():
 
 @pytest.mark.asyncio
 async def test_poll_events_ai_person_separate_from_motion():
-    transport = FakeTuyaTransport(initial_dps={109: False, 110: False})
+    motion_dp = DEFAULT_DP_MAP["motion_event"]
+    ai_dp = DEFAULT_DP_MAP["ai_person_event"]
+    transport = FakeTuyaTransport(initial_dps={motion_dp: False, ai_dp: False})
     backend = _build(transport)
     await backend.poll_events()  # initial
 
-    transport.set_dp(109, True)
-    transport.set_dp(110, True)
+    transport.set_dp(motion_dp, True)
+    transport.set_dp(ai_dp, True)
     events = await backend.poll_events()
     labels = {e.label for e in events}
     assert labels == {"motion", "ai_person"}

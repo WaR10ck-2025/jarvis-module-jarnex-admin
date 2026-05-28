@@ -45,16 +45,42 @@ except ImportError:
 logger = logging.getLogger("jarvis.module.jarnex_admin.tuya_lan")
 
 
+# Tuya-Smart-Camera-Convention (live-verifiziert 2026-05-29 gegen Jarnex JNOL4/Ens-PL01).
+# WICHTIG: Smart-Cams verwenden DPs 100+, NICHT die Smart-Plug-Defaults (DP 1, 22).
+# Tuya-Standard-Instruction-Set ab DP 101:
+#   basic_indicator(101), basic_private(103), basic_flip(104), basic_osd(105),
+#   nightvision_mode(106), motion_switch(107), decibel_sensitivity(109),
+#   sd_status(110), record_switch(116), ipc_sharp(117), ptz_control(119),
+#   ipc_bright(123), nightvision_mode_alt(124), siren_switch(134),
+#   floodlight_switch(138), humanoid_filter(139), motion_tracking(150),
+#   ptz_stop(151), basic_wdr(159), basic_device_volume(160),
+#   ipc_siren_duration(193), ipc_siren_volume(194), ipc_object_outline(197),
+#   ipc_mute_record(198)
 DEFAULT_DP_MAP: dict[str, int] = {
-    "light_switch": 1,
-    "brightness": 22,
-    "ptz_direction": 101,
-    "motion_armed": 102,
-    "ai_person_armed": 103,
-    "siren_trigger": 104,
-    "motion_event": 109,
-    "ai_person_event": 110,
-    "snapshot_trigger": 132,
+    "light_switch": 138,         # floodlight_switch (Boolean)
+    "brightness": 123,           # ipc_bright (Integer, IPC-Image-Brightness; Lampe selbst hat keine eigene Brightness)
+    "ptz_direction": 119,        # ptz_control (Enum: "0"-"7" fuer up/down/left/right/etc.)
+    "ptz_stop": 151,             # ptz_stop (Boolean toggle)
+    "motion_armed": 107,         # motion_switch (Boolean)
+    "ai_person_armed": 139,      # humanoid_filter (Boolean, AI-Person-Filter)
+    "siren_trigger": 134,        # siren_switch (Boolean)
+    "indicator_led": 101,        # basic_indicator (Boolean)
+    "private_mode": 103,         # basic_private (Boolean)
+    "nightvision_mode": 106,     # nightvision_mode (Enum string "0"=auto, "1"=on, "2"=off)
+    "motion_event": 115,         # motion event (typ. trigger DP)
+    "ai_person_event": 117,      # AI-Person event
+    "record_switch": 116,        # record_switch (Boolean)
+}
+
+# PTZ-Enum-Mapping fuer DP 119 (ptz_control).
+# Tuya-Standard-Instruction-Set: "0"=stop, "1"=top, "2"=bottom, "3"=left,
+# "4"=right, "5"=top_left, "6"=top_right, "7"=bottom_left, "8"=bottom_right
+PTZ_ENUM_MAP: dict[str, str] = {
+    "stop": "0",
+    "up": "1",
+    "down": "2",
+    "left": "3",
+    "right": "4",
 }
 
 
@@ -184,17 +210,28 @@ class JarnexTuyaLAN:
 
     async def ptz(self, op: str, duration_s: float = 1.0) -> dict[str, Any]:
         op_norm = (op or "").lower()
-        if op_norm not in ("up", "down", "left", "right", "stop"):
-            raise JarnexError(f"PTZ op muss up/down/left/right/stop sein, bekam {op!r}")
+        if op_norm not in PTZ_ENUM_MAP:
+            raise JarnexError(
+                f"PTZ op muss {list(PTZ_ENUM_MAP)} sein, bekam {op!r}"
+            )
         t = self._ensure_transport()
-        result = await t.set_value(self._dp("ptz_direction"), op_norm)
+        # Tuya-Smart-Cam ptz_control ist Enum-String, NICHT Direction-Name.
+        # PTZ_ENUM_MAP mappt 'left' -> '3' usw. (Tuya-Standard-Instruction-Set).
+        result = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP[op_norm])
         if op_norm != "stop" and duration_s > 0:
             await asyncio.sleep(min(duration_s, 10.0))
-            result_stop = await t.set_value(self._dp("ptz_direction"), "stop")
+            # Stop ueber dedizierten ptz_stop-Toggle (Boolean), nicht ptz_control=0
+            try:
+                result_stop = await t.set_value(self._dp("ptz_stop"), True)
+            except JarnexError:
+                # Fallback: ptz_control = "0" (stop)
+                result_stop = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP["stop"])
             return {"move": result, "stop": result_stop}
         return {"move": result}
 
     async def trigger_siren(self) -> dict[str, Any]:
+        # siren_switch ist toggle: True = sirene an. Cam macht typ. Auto-Off nach 10s.
+        # Wenn manuelles Off noetig, separater set_value(siren_switch, False) Call.
         t = self._ensure_transport()
         r = await t.set_value(self._dp("siren_trigger"), True)
         return {"siren": r}

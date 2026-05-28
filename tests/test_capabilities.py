@@ -28,7 +28,8 @@ async def test_probe_tuya_lan_has_light_ptz_siren():
     assert summary["has_siren"] is True
     assert summary["has_snapshot_local"] is False
     assert summary["stream_url"] is None
-    assert summary["dp_id_map"]["light_switch"] == 1
+    # DP-Map nach Smart-Cam-Convention: light_switch = floodlight_switch (DP 138)
+    assert summary["dp_id_map"]["light_switch"] == 138
     # Liveness: Mock liefert DPs -> raw_dps non-empty -> live_probe_ok=True
     assert summary["live_probe_ok"] is True
 
