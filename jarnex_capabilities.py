@@ -88,19 +88,37 @@ async def probe(backend: JarnexBackend) -> dict[str, Any]:
         summary["has_ai_person"] = False
         summary["has_snapshot_local"] = True  # ONVIF Snapshot-URI
 
-    # Optional: live State-Call. Fail-soft: wenn Probe scheitert, Hints bleiben.
+    # Live-State-Probe. Backend-spezifischer Payload-Validation-Check —
+    # NICHT nur isinstance(state, dict)! tinytuya liefert bei falschem
+    # local_key ein dict mit leerem raw_dps statt Exception (siehe
+    # feedback_tuya_cam_substrate_fingerprint.md Punkt 5).
     try:
         state = await backend.get_state()
-        if isinstance(state, dict):
-            # Heuristik: wenn das State-Dict ein "raw_dps" hat, ist die Cam tatsaechlich responsive
-            summary["live_probe_ok"] = True
-        else:
-            summary["live_probe_ok"] = False
+        summary["live_probe_ok"] = _is_live(backend.backend_id, state)
     except Exception as e:  # noqa: BLE001
         logger.info("get_state Probe fail (toleriert): %s", e)
         summary["live_probe_ok"] = False
 
     return summary
+
+
+def _is_live(backend_id: str, state: Any) -> bool:
+    """Backend-spezifischer Payload-Validation-Check.
+
+    Reachability (TCP-Connect, HTTP-200) ist NICHT gleich Liveness:
+    - tuya_lan: falscher local_key liefert leeres raw_dps statt Error
+    - tuya_cloud: invalid token liefert leeres raw_codes statt Error
+    - rtsp: stream_url ist statisch, also Liveness = stream_url-Wahrheit
+    """
+    if not isinstance(state, dict):
+        return False
+    if backend_id == "tuya_lan":
+        return bool(state.get("raw_dps"))
+    if backend_id == "tuya_cloud":
+        return bool(state.get("raw_codes"))
+    if backend_id == "rtsp":
+        return bool(state.get("stream_url"))
+    return False
 
 
 def serialize(summary: dict[str, Any]) -> str:
