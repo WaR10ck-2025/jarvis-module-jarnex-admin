@@ -239,6 +239,7 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdLight(${cam.id}, false)">Licht aus</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
+          <button class="secondary" onclick="cmdPtzStop(${cam.id})" title="Rotation sofort stoppen" style="color:#ff5252">⏹</button>
           <button class="secondary" onclick="cmdHomeGo(${cam.id})" title="zu Home-Position">🏠</button>
           <button class="secondary" onclick="cmdHomeSet(${cam.id})" title="aktuelle Position als Home speichern">📍</button>
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
@@ -364,6 +365,15 @@ async function cmdPtz(camId, op) {
     await api(`/cameras/${camId}/ptz`, {
       method: 'POST',
       body: JSON.stringify({ op, duration_s: 1.0 }),
+    });
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdPtzStop(camId) {
+  try {
+    await api(`/cameras/${camId}/ptz`, {
+      method: 'POST',
+      body: JSON.stringify({ op: 'stop', duration_s: 0 }),
     });
   } catch (e) { alert('Fehler: ' + e.message); }
 }

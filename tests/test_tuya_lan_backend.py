@@ -79,7 +79,11 @@ async def test_ptz_stop_no_duration_sleep():
     transport = FakeTuyaTransport()
     backend = _build(transport)
     result = await backend.ptz("stop", duration_s=0.0)
-    assert "move" in result
+    # Stop setzt ptz_direction=0 UND ptz_stop=True (defensiv beide DPs).
+    assert "direction_zero" in result
+    # ptz_stop (DP 151) sollte True gesetzt sein
+    stop_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 151]
+    assert stop_calls and stop_calls[-1][1]["value"] is True
 
 
 @pytest.mark.asyncio
