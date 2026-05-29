@@ -56,6 +56,25 @@ logger = logging.getLogger("jarvis.module.jarnex_admin.tuya_lan")
 #   ptz_stop(151), basic_wdr(159), basic_device_volume(160),
 #   ipc_siren_duration(193), ipc_siren_volume(194), ipc_object_outline(197),
 #   ipc_mute_record(198)
+#
+# Sirenen-Sub-System (live-verifiziert 2026-05-29):
+#   DP 134 = siren_switch (Boolean)
+#       - Armed-Master-Toggle: True = Auto-Sirene-bei-Motion erlaubt
+#       - WICHTIG: KEIN direkter Sound-Trigger via LAN-DP-Set!
+#       - LAN set(134, True) macht NIE Sound, nur state-toggle
+#       - Sound-Trigger NUR via Cloud-RPC mit demselben Code-Name "siren_switch"
+#       - Tuya-Architektur-Quirk: identischer Code, anderer Channel = anderes Behavior
+#   DP 168 = ipc_auto_siren (Boolean)
+#       - Auto-Sirene wirklich aktivieren bei Motion-/AI-Detection-Events
+#       - Voraussetzung dass siren_switch=True + ipc_auto_siren=True
+#   DP 193 = ipc_siren_duration (Integer 1-60s)
+#       - Sirenen-Spielzeit bei Trigger (Default 50s, sehr lang!)
+#       - Vor Test-Trigger auf 5s reduzieren um Laerm zu begrenzen
+#   DP 194 = ipc_siren_volume (Integer 0-100%)
+#       - Lautstaerke. Default ~5 (von Skala bis 100?), Cam ist trotzdem 100-110 dB
+#   DP 160 = (vermutlich State-Mirror der Cloud-Aktion)
+#       - Beim App-Sirenen-Trigger sah man 12 → 1 → 12 mit ~5s Pause
+#       - Direkter LAN-Set 160=1 macht KEINE Sirene → State-only-Mirror, kein Trigger
 DEFAULT_DP_MAP: dict[str, int] = {
     "light_switch": 138,         # floodlight_switch (Boolean)
     "brightness": 123,           # ipc_bright (Integer, IPC-Image-Brightness; Lampe selbst hat keine eigene Brightness)
@@ -230,11 +249,26 @@ class JarnexTuyaLAN:
         return {"move": result}
 
     async def trigger_siren(self) -> dict[str, Any]:
-        # siren_switch ist toggle: True = sirene an. Cam macht typ. Auto-Off nach 10s.
-        # Wenn manuelles Off noetig, separater set_value(siren_switch, False) Call.
+        """Setzt siren_switch (DP 134) auf True.
+
+        WICHTIG (live-verifiziert 2026-05-29 mit Jarnex Ens-PL01):
+        siren_switch ist KEIN direkter Sound-Trigger. Es ist ein
+        Armed-Toggle fuer Auto-Sirene bei Motion-Events. Setzen auf
+        True macht Cam fuer 'spiele Sirene bei naechstem Motion-Event'
+        bereit. Echter Sound kommt nur via Auto-Trigger (Motion +
+        ipc_auto_siren=True auf DP 168).
+
+        Manueller Sound-Test: False -> sleep 1s -> True provoziert auf
+        manchen Cams einen Transition-Trigger, aber NICHT auf der
+        getesteten Jarnex. Tuya-Smart-Cams haben in Standard-Instruction-
+        Set keinen manuellen "play siren now"-DP.
+
+        Fuer echten Lärm-Test: ipc_auto_siren auf DP 168 = True setzen
+        UND Motion provozieren (Hand vor Cam wedeln).
+        """
         t = self._ensure_transport()
         r = await t.set_value(self._dp("siren_trigger"), True)
-        return {"siren": r}
+        return {"siren_armed": r, "note": "armed-toggle, kein direkter Sound-Trigger"}
 
     async def get_snapshot(self) -> bytes:
         """Tuya-LAN bietet keinen direkten JPEG-Stream. Snapshot-DP triggert das

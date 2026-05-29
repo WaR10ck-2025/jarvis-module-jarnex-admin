@@ -457,14 +457,67 @@ async def light_route(cam_id: int, payload: LightCommand) -> dict[str, Any]:
 
 @router.post("/cameras/{cam_id}/siren")
 async def siren_route(cam_id: int, payload: SirenCommand) -> dict[str, Any]:
+    """Sirenen-Trigger.
+
+    WICHTIG (live-verifiziert 2026-05-29 mit Jarnex Ens-PL01): Tuya-LAN-DP-Set
+    von `siren_switch` (DP 134) ist nur Armed-Toggle, KEIN Sound-Trigger. Echter
+    Sound geht NUR ueber Tuya-Cloud-RPC mit demselben Code-Name. Daher:
+
+    - Bei tuya_lan-Backend + Cloud-Settings hinterlegt: hybrid-dispatch — LAN
+      setzt armed-state, Cloud-RPC triggert Sound.
+    - Bei tuya_lan ohne Cloud-Settings: nur armed-toggle, kein Sound (HTTP 200
+      mit Warning-Field). Caller muss Cloud-Backend setup'pen.
+    - Bei tuya_cloud-Backend: direkter Cloud-Trigger, klingt.
+    - Bei rtsp-Backend: NotImplementedError (kein Standard-ONVIF-Siren-Profil).
+    """
     if payload.action != "play":
         raise HTTPException(status_code=400, detail="action muss 'play' sein")
     backend = await _get_backend(cam_id)
+
+    result: dict[str, Any] = {}
+    warnings: list[str] = []
+
+    # Phase 1: backend-natives trigger_siren (LAN: armed-toggle, Cloud: sound)
     try:
-        result = await backend.trigger_siren()
+        result["primary"] = await backend.trigger_siren()
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
     except JarnexError as e:
         raise HTTPException(status_code=502, detail=f"trigger_siren fehlgeschlagen: {e}")
-    return {"cam_id": cam_id, "action": "play", "result": result}
+
+    # Phase 2: bei tuya_lan-Backend zusaetzlich Cloud-RPC fuer echten Sound
+    if backend.backend_id == "tuya_lan":
+        cloud_settings = _resolve_cloud_settings()
+        if cloud_settings:
+            cam = get_camera(cam_id)
+            try:
+                from jarnex_backend import select_backend
+                from jarnex_database import get_credentials
+                cam_cloud = dict(cam)
+                cam_cloud["backend"] = "tuya_cloud"
+                cloud_backend = select_backend(
+                    cam_cloud,
+                    get_credentials(cam_id) or {},
+                    cloud_settings=cloud_settings,
+                    cloud_fallback_enabled=True,
+                )
+                await cloud_backend.login()
+                result["cloud_sound"] = await cloud_backend.trigger_siren()
+                await cloud_backend.close()
+            except (JarnexError, Exception) as e:  # noqa: BLE001
+                warnings.append(f"Cloud-RPC fuer Sound-Trigger fehlgeschlagen: {e}")
+        else:
+            warnings.append(
+                "Sirene wurde nur armed-toggled (kein Sound). Fuer echten Sound "
+                "tuya_cloud_access_id/access_key/region in /settings hinterlegen."
+            )
+
+    return {
+        "cam_id": cam_id,
+        "action": "play",
+        "result": result,
+        "warnings": warnings,
+    }
 
 
 @router.get("/cameras/{cam_id}/snapshot")
