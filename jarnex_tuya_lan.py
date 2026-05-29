@@ -257,7 +257,9 @@ class JarnexTuyaLAN:
             return {"stop": result_stop}
         result = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP[op_norm])
         if duration_s > 0:
-            await asyncio.sleep(min(duration_s, 10.0))
+            # Cap auf 30s — typische Tuya-PT-Cam Pan-Range ist ~6-12s,
+            # 30s sichert volle Calibrate auch bei langsameren Cams.
+            await asyncio.sleep(min(duration_s, 30.0))
             # Stop ueber dedizierten ptz_stop-Toggle (Boolean), nicht ptz_control=0
             try:
                 result_stop = await t.set_value(self._dp("ptz_stop"), True)

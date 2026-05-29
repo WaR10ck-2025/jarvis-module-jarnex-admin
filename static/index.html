@@ -242,6 +242,7 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdPtzStop(${cam.id})" title="Rotation sofort stoppen" style="color:#ff5252">⏹</button>
           <button class="secondary" onclick="cmdHomeGo(${cam.id})" title="zu Home-Position">🏠</button>
           <button class="secondary" onclick="cmdHomeSet(${cam.id})" title="aktuelle Position als Home speichern">📍</button>
+          <button class="secondary" onclick="cmdHomeReset(${cam.id})" title="Home-Position + Offset zuruecksetzen">🔄</button>
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
           <button class="secondary" onclick="cmdSiren(${cam.id})" style="color:#ff9800">🔊 Siren</button>
           <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
@@ -310,10 +311,17 @@ async function cmdLight(camId, on) {
 }
 
 async function cmdHomeSet(camId) {
-  const ok = confirm(
-    'Aktuelle Cam-Position als Home speichern?\n\n' +
-    '(Voraussetzung: vorher per ← → die gewuenschte Position anfahren)'
-  );
+  let preview = '';
+  try {
+    const status = await api(`/cameras/${camId}/home`);
+    const curr = Number(status.current_offset_s) || 0;
+    preview = `Aktuelles offset: ${curr.toFixed(1)}s ab links-Anschlag.\n`;
+    if (status.home_offset_s !== null && status.home_offset_s !== undefined) {
+      preview += `Vorheriges Home: ${Number(status.home_offset_s).toFixed(1)}s.\n`;
+    }
+    preview += '\nTipp: zuerst 🔄 Reset, dann via ← / → zur Wunsch-Position, dann 📍.\n\n';
+  } catch (e) { /* ignore */ }
+  const ok = confirm(`Aktuelle Cam-Position als Home speichern?\n\n${preview}`);
   if (!ok) return;
   try {
     const r = await api(`/cameras/${camId}/home/set`, { method: 'POST' });
@@ -322,15 +330,41 @@ async function cmdHomeSet(camId) {
 }
 
 async function cmdHomeGo(camId) {
+  let preview = '';
+  try {
+    const status = await api(`/cameras/${camId}/home`);
+    if (status.home_offset_s === null || status.home_offset_s === undefined) {
+      alert('Kein Home gesetzt. Zuerst 📍 Set-Home aufrufen.');
+      return;
+    }
+    const home = Number(status.home_offset_s);
+    const curr = Number(status.current_offset_s) || 0;
+    preview = `Home-Offset: ${home.toFixed(1)}s.\nAktuell: ${curr.toFixed(1)}s.\n\n`;
+  } catch (e) { /* ignore */ }
   const ok = confirm(
-    'Cam zu Home-Position fahren?\n\n' +
-    'Faehrt zuerst ~10s links bis zum Hardware-Anschlag (Calibrate),\n' +
-    'dann rechts zur gespeicherten Home-Position. Dauer: 10-20s.'
+    `Cam zu Home-Position fahren?\n\n${preview}` +
+    'Sequenz: 15s links (Calibrate) -> rechts zur Home-Position.\n' +
+    'Gesamt-Dauer: 20-30s.'
   );
   if (!ok) return;
   try {
     const r = await api(`/cameras/${camId}/home/go`, { method: 'POST' });
     alert(`Cam an Home-Position. offset=${r.home_offset_s.toFixed(2)}s`);
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdHomeReset(camId) {
+  const ok = confirm(
+    'Home-Position UND Offset zuruecksetzen?\n\n' +
+    'Danach:\n' +
+    '1. ← einmal lang (oder ⏹ stop wenn am Anschlag) -> Cam ist links\n' +
+    '2. → mehrmals 1s-Schritte zur Wunsch-Position\n' +
+    '3. 📍 Set-Home klickt'
+  );
+  if (!ok) return;
+  try {
+    await api(`/cameras/${camId}/home/reset`, { method: 'POST' });
+    alert('Home + Offset zurueckgesetzt. Bitte neu Setup machen.');
   } catch (e) { alert('Fehler: ' + e.message); }
 }
 

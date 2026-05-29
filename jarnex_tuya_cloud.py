@@ -243,7 +243,7 @@ class JarnexTuyaCloud:
             return {"stop": await self._send_command("ptz_stop", True)}
         result = await self._send_command("ptz_control", op_norm)
         if duration_s > 0:
-            await asyncio.sleep(min(duration_s, 10.0))
+            await asyncio.sleep(min(duration_s, 30.0))
             stop = await self._send_command("ptz_stop", True)
             return {"move": result, "stop": stop}
         return {"move": result}

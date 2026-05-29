@@ -456,11 +456,15 @@ async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
 
     # Update pan-offset tracking (Software-side Position-Estimate fuer Home-Position).
     # Left subtrahiert, Right addiert. Up/Down/Stop ignoriert (Pan-Only-Hardware).
+    # Cap auf [0, PAN_RANGE_MAX_S] verhindert Ueber-Akkumulation wenn User
+    # gegen Hardware-Anschlag klickt (Cam ignoriert weitere Klicks, Software
+    # weiss das nicht).
     if op in ("left", "right") and payload.duration_s > 0:
         delta = -payload.duration_s if op == "left" else payload.duration_s
         try:
             current = float(get_setting(f"cam_{cam_id}_current_offset_s") or "0")
-            set_setting(f"cam_{cam_id}_current_offset_s", str(current + delta))
+            new_offset = max(0.0, min(PAN_RANGE_MAX_S, current + delta))
+            set_setting(f"cam_{cam_id}_current_offset_s", str(new_offset))
         except (TypeError, ValueError):
             pass  # offset-tracking ist fail-soft, kein Show-Stopper
 
@@ -498,13 +502,17 @@ async def _cloud_ptz_stop(cam_id: int, cloud_settings: dict[str, str]) -> None:
 # ============================================================================
 
 
+PAN_RANGE_MAX_S = 12.0  # Typische Tuya-PT-Cam Pan-Range. Cap fuer offset-tracking.
+CALIBRATE_DURATION_S = 15.0  # Reserve gegenueber typischer 6-12s Pan-Range.
+
+
 @router.post("/cameras/{cam_id}/calibrate")
 async def calibrate_route(cam_id: int) -> dict[str, Any]:
-    """Faehrt Cam ganz nach links (10s) bis zum mechanischen Anschlag.
+    """Faehrt Cam 15s nach links bis zum mechanischen Anschlag.
     Setzt current_offset = 0 und calibrated_at = now."""
     backend = await _get_backend(cam_id)
     try:
-        await backend.ptz("left", duration_s=10.0)
+        await backend.ptz("left", duration_s=CALIBRATE_DURATION_S)
     except JarnexError as e:
         raise HTTPException(status_code=502, detail=f"calibrate fehlgeschlagen: {e}")
     set_setting(f"cam_{cam_id}_current_offset_s", "0.0")
@@ -514,6 +522,16 @@ async def calibrate_route(cam_id: int) -> dict[str, Any]:
         "current_offset_s": 0.0,
         "note": "Cam ist nun am linken Hardware-Anschlag (offset=0).",
     }
+
+
+@router.post("/cameras/{cam_id}/home/reset")
+async def home_reset_route(cam_id: int) -> dict[str, Any]:
+    """Loescht Home-Position UND current_offset. User soll neu Setup machen."""
+    if not get_camera(cam_id):
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    set_setting(f"cam_{cam_id}_home_offset_s", "")
+    set_setting(f"cam_{cam_id}_current_offset_s", "0.0")
+    return {"cam_id": cam_id, "note": "Home-Position + Offset zurueckgesetzt."}
 
 
 @router.post("/cameras/{cam_id}/home/set")
@@ -554,18 +572,19 @@ async def home_go_route(cam_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"home_offset_s invalid: {home_s!r}")
 
     backend = await _get_backend(cam_id)
-    # 1. Calibrate (10s left)
+    # 1. Calibrate (15s left zum Anschlag)
     try:
-        await backend.ptz("left", duration_s=10.0)
+        await backend.ptz("left", duration_s=CALIBRATE_DURATION_S)
     except JarnexError as e:
         raise HTTPException(status_code=502, detail=f"home-go calibrate fehlgeschlagen: {e}")
-    # 2. Right fuer home_offset_s
-    if home_offset > 0:
+    # 2. Right fuer home_offset_s (gecapped auf PAN_RANGE_MAX_S)
+    effective_right = min(home_offset, PAN_RANGE_MAX_S)
+    if effective_right > 0:
         try:
-            await backend.ptz("right", duration_s=min(home_offset, 10.0))
+            await backend.ptz("right", duration_s=effective_right)
         except JarnexError as e:
             raise HTTPException(status_code=502, detail=f"home-go right fehlgeschlagen: {e}")
-    set_setting(f"cam_{cam_id}_current_offset_s", str(home_offset))
+    set_setting(f"cam_{cam_id}_current_offset_s", str(effective_right))
     return {
         "cam_id": cam_id,
         "home_offset_s": home_offset,
