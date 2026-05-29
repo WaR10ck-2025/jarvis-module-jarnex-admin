@@ -98,16 +98,29 @@ class JarnexTuyaCloud:
             self._client = httpx.AsyncClient(**kwargs)
         return self._client
 
-    def _sign(self, method: str, url_path: str, ts: int, with_token: bool = False) -> str:
+    _EMPTY_BODY_SHA256 = (
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+
+    def _sign(
+        self,
+        method: str,
+        url_path: str,
+        ts: int,
+        with_token: bool = False,
+        body_sha256: str | None = None,
+    ) -> str:
         """Tuya-IoT v2 HMAC-SHA256 Signing.
 
         sign = HMAC-SHA256(access_key, access_id + (access_token if with_token else '') + ts + nonce + stringToSign)
         stringToSign = method.upper() + '\n' + Content-SHA256 + '\n' + headers + '\n' + url_path
 
-        Simplified: empty body sha256 = e3b0c... (constant). Wir signen ohne Custom-Header.
+        WICHTIG (Bug-Fix 2026-05-29): bei POST mit body MUSS body_sha256 vom
+        echten Body kommen, nicht der empty-Hash. Sonst lehnt Tuya mit
+        "sign invalid" ab. Default empty-Hash nur fuer GET-Requests.
         """
-        body_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        string_to_sign = f"{method.upper()}\n{body_sha256}\n\n{url_path}"
+        sha = body_sha256 or self._EMPTY_BODY_SHA256
+        string_to_sign = f"{method.upper()}\n{sha}\n\n{url_path}"
         token = self._access_token if (with_token and self._access_token) else ""
         nonce = ""  # optional
         signing_str = f"{self.access_id}{token}{ts}{nonce}{string_to_sign}"
@@ -126,7 +139,17 @@ class JarnexTuyaCloud:
         with_token: bool = True,
     ) -> dict[str, Any]:
         ts = self._clock()
-        sign = self._sign(method, url_path, ts, with_token=with_token)
+        # Pre-serialize body damit HMAC-Sign der gleichen Bytes wie HTTP-Send
+        # rechnet. Wenn httpx den body anders serialisiert (z.B. spaces nach
+        # separators), wuerde body-sha256 mismatchen.
+        body_bytes: bytes | None = None
+        body_sha = self._EMPTY_BODY_SHA256
+        if json_body is not None:
+            body_bytes = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
+            body_sha = hashlib.sha256(body_bytes).hexdigest()
+        sign = self._sign(
+            method, url_path, ts, with_token=with_token, body_sha256=body_sha,
+        )
         headers = {
             "client_id": self.access_id,
             "sign": sign,
@@ -139,7 +162,12 @@ class JarnexTuyaCloud:
 
         client = self._get_client()
         try:
-            resp = await client.request(method, url_path, headers=headers, json=json_body)
+            # Sende die exakt selben Bytes wie HMAC signed (kein json= damit
+            # httpx nicht eigene Whitespace einfuegt)
+            if body_bytes is not None:
+                resp = await client.request(method, url_path, headers=headers, content=body_bytes)
+            else:
+                resp = await client.request(method, url_path, headers=headers)
         except Exception as e:  # noqa: BLE001
             raise JarnexUnreachable(f"Tuya-Cloud-Request {url_path} fehlgeschlagen: {e}") from e
         if resp.status_code >= 500:
