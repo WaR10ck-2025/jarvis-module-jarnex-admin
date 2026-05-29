@@ -324,14 +324,26 @@ async def list_cameras_route(include_summary: bool = False, include_state: bool 
             summary_json = cap_row.get("summary")
             cam["summary"] = caps_mod.deserialize(summary_json)
     if include_state and cams:
-        # Parallel get_state fuer alle Cams. Exceptions werden geschluckt -
-        # state=null bedeutet "Cam-State nicht abrufbar" (z.B. offline).
+        # Parallel get_state fuer alle Cams. LAN-state primary, Cloud-Augmentation
+        # fuer Codes ohne bekannten LAN-DP (z.B. basic_private auf Jarnex Ens-PL01).
+        # Exceptions werden geschluckt - state=null bedeutet "nicht abrufbar".
         async def _safe_get_state(cam_id: int):
             try:
                 backend = await _get_backend(cam_id)
-                return await backend.get_state()
+                state = await backend.get_state()
             except Exception:  # noqa: BLE001
                 return None
+            # Cloud-Augmentation: codes die LAN nicht zuverlaessig liefert.
+            try:
+                cb = await _get_cloud_backend(cam_id)
+                try:
+                    codes = await cb.get_status_by_code()
+                    state["private_mode"] = bool(codes.get("basic_private"))
+                finally:
+                    await cb.close()
+            except Exception:  # noqa: BLE001
+                state["private_mode"] = None  # nicht abrufbar
+            return state
         states = await asyncio.gather(*[_safe_get_state(c["id"]) for c in cams])
         for cam, st in zip(cams, states):
             cam["state"] = st

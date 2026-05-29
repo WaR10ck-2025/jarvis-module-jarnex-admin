@@ -294,6 +294,7 @@ async function loadCameras() {
           ${renderInlineToggle(cam.id, 'motion_switch', cam.state?.motion_armed, 'Motion', 'on')}
           ${renderInlineToggle(cam.id, 'humanoid_filter', cam.state?.ai_person_armed, 'AI-Person', 'on')}
           ${renderInlineToggle(cam.id, 'basic_private', cam.state?.private_mode, 'Privacy', 'private-on')}
+          ${renderInlineToggle(cam.id, 'basic_flip', cam.state?.image_flip, 'Flip 180°', 'on')}
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
           <button class="secondary" onclick="cmdPtzStop(${cam.id})" title="Rotation sofort stoppen" style="color:#ff5252">⏹</button>

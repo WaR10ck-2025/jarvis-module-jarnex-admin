@@ -84,7 +84,7 @@ DEFAULT_DP_MAP: dict[str, int] = {
     "ai_person_armed": 139,      # humanoid_filter (Boolean, AI-Person-Filter)
     "siren_trigger": 134,        # siren_switch (Boolean)
     "indicator_led": 101,        # basic_indicator (Boolean)
-    "private_mode": 103,         # basic_private (Boolean)
+    "image_flip": 103,           # basic_flip (Boolean) - Bild-Drehung um 180. NICHT basic_private!
     "nightvision_mode": 106,     # nightvision_mode (Enum string "0"=auto, "1"=on, "2"=off)
     "motion_event": 115,         # motion event (typ. trigger DP)
     "ai_person_event": 117,      # AI-Person event
@@ -99,7 +99,7 @@ DEFAULT_DP_MAP: dict[str, int] = {
 CODE_TO_DP: dict[str, int] = {
     # Boolean
     "basic_indicator": 101,
-    "basic_private": 103,
+    "basic_flip": 103,           # DP 103 = Bild um 180 drehen. NICHT basic_private (Annahme aus Standard-Doku war falsch).
     "motion_switch": 107,
     "record_switch": 116,
     "ptz_stop": 151,
@@ -258,7 +258,9 @@ class JarnexTuyaLAN:
             "brightness": dps.get(str(self._dp("brightness"))),
             "motion_armed": bool(dps.get(str(self._dp("motion_armed")))),
             "ai_person_armed": bool(dps.get(str(self._dp("ai_person_armed")))),
-            "private_mode": bool(dps.get(str(self._dp("private_mode")))),
+            "image_flip": bool(dps.get(str(self._dp("image_flip")))),
+            # private_mode (basic_private) hat keinen bekannten LAN-DP -
+            # wird via Cloud-State-Augmentation in _safe_get_state geliefert.
             "raw_dps": dps,
         }
 
