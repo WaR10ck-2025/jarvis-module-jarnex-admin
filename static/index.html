@@ -240,6 +240,7 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
+          <button class="secondary" onclick="cmdSiren(${cam.id})" style="color:#ff9800">🔊 Siren</button>
           <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
         </td>
       </tr>`;
@@ -288,11 +289,46 @@ async function runDiscover() {
 
 async function cmdLight(camId, on) {
   try {
-    await api(`/cameras/${camId}/light`, {
+    const result = await api(`/cameras/${camId}/light`, {
       method: 'POST',
       body: JSON.stringify({ on, brightness: on ? 80 : null }),
     });
-    alert(`Cam ${camId}: Licht ${on ? 'AN' : 'AUS'}`);
+    // State direkt nach Toggle auslesen — zeigt ob's wirklich gewirkt hat.
+    await new Promise(r => setTimeout(r, 600));
+    const state = await api(`/cameras/${camId}/state`);
+    const actual_on = state?.state?.light_on;
+    const ok = actual_on === on;
+    alert(
+      `Cam ${camId}: Licht ${on ? 'AN' : 'AUS'} angefordert.\n` +
+      `Live-State: light_on=${actual_on}\n` +
+      (ok ? 'OK' : 'WARNUNG: State stimmt nicht ueberein!')
+    );
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdSiren(camId) {
+  // Sirene ist LAUT — Confirm-Dialog. Cam-Default-Duration ist 5s (vom Setup-Skript).
+  const ok = confirm(
+    'Achtung: Sirene wird 5 Sekunden LAUT (~100 dB).\n' +
+    'Wirklich ausloesen?\n\n' +
+    '(Duration kann vorher per Tuya-App auf 1s reduziert werden)'
+  );
+  if (!ok) return;
+  try {
+    const r = await api(`/cameras/${camId}/siren`, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'play' }),
+    });
+    let msg = `Cam ${camId}: Siren-Trigger gesendet.\n`;
+    if (r.warnings && r.warnings.length) {
+      msg += '\nWarnings:\n' + r.warnings.map(w => '- ' + w).join('\n');
+    }
+    if (r.result && r.result.cloud_sound) {
+      msg += '\nCloud-RPC-Sound: OK';
+    } else if (!r.warnings || !r.warnings.length) {
+      msg += '\n(nur LAN armed-toggle, kein Sound — Cloud-Settings fehlen?)';
+    }
+    alert(msg);
   } catch (e) { alert('Fehler: ' + e.message); }
 }
 
