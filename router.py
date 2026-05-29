@@ -471,6 +471,93 @@ async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
     return {"cam_id": cam_id, "op": payload.op, "result": result}
 
 
+async def _get_cloud_backend(cam_id: int):
+    """Liefert ein logged-in tuya_cloud-Backend fuer die Cam. Caller muss close() aufrufen."""
+    from jarnex_backend import select_backend
+    from jarnex_database import get_credentials
+    cloud_settings = _resolve_cloud_settings()
+    if not cloud_settings:
+        raise HTTPException(
+            status_code=412,
+            detail="Cloud-Settings fehlen (tuya_cloud_access_id/key/region/project_id in /settings).",
+        )
+    cam = get_camera(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    cam_cloud = dict(cam)
+    cam_cloud["backend"] = "tuya_cloud"
+    cb = select_backend(
+        cam_cloud,
+        get_credentials(cam_id) or {},
+        cloud_settings=cloud_settings,
+        cloud_fallback_enabled=True,
+    )
+    await cb.login()
+    return cb
+
+
+# Codes die destruktiv/gefaehrlich sind und doppelten Confirm im UI brauchen.
+# UI rendert diese in separater Sektion mit Cam-Name-Token als Confirm.
+DANGEROUS_FUNCTION_CODES = {"sd_format", "device_restart", "ptz_calibration"}
+
+
+@router.get("/cameras/{cam_id}/functions")
+async def functions_list_route(cam_id: int) -> dict[str, Any]:
+    """Listet alle Cam-Functions mit Type/Range/Min/Max + aktuelle Werte.
+    Dynamisch via Cloud-API — funktioniert fuer jede Tuya-Smart-Cam."""
+    cb = await _get_cloud_backend(cam_id)
+    try:
+        funcs = await cb.get_functions()
+        status = await cb.get_status_by_code()
+    finally:
+        await cb.close()
+
+    enriched: list[dict[str, Any]] = []
+    for f in funcs:
+        code = f.get("code", "")
+        if not code:
+            continue
+        # values ist JSON-String; parse fuer einfacheres Frontend
+        values_meta: dict[str, Any] = {}
+        try:
+            raw = f.get("values") or "{}"
+            values_meta = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            values_meta = {}
+        enriched.append({
+            "code": code,
+            "name": f.get("name", code),
+            "type": f.get("type", "Unknown"),
+            "values_meta": values_meta,
+            "current_value": status.get(code),
+            "dangerous": code in DANGEROUS_FUNCTION_CODES,
+        })
+    return {"cam_id": cam_id, "functions": enriched, "count": len(enriched)}
+
+
+class FunctionSetCommand(BaseModel):
+    value: Any = Field(description="Value matching the function's type (bool/str/int)")
+
+
+@router.post("/cameras/{cam_id}/functions/{code}")
+async def functions_set_route(cam_id: int, code: str, payload: FunctionSetCommand) -> dict[str, Any]:
+    """Setzt eine Cam-Function via Cloud-RPC. Type-Coercion macht Cloud-API selbst."""
+    cb = await _get_cloud_backend(cam_id)
+    try:
+        result = await cb.set_function(code, payload.value)
+    except JarnexError as e:
+        raise HTTPException(status_code=502, detail=f"set_function({code}={payload.value!r}) fehlgeschlagen: {e}")
+    finally:
+        await cb.close()
+    return {
+        "cam_id": cam_id,
+        "code": code,
+        "value": payload.value,
+        "dangerous": code in DANGEROUS_FUNCTION_CODES,
+        "result": result,
+    }
+
+
 async def _cloud_ptz_stop(cam_id: int, cloud_settings: dict[str, str]) -> None:
     """Fire-and-forget Cloud-RPC ptz_stop. Exceptions geschluckt — Best-Effort."""
     try:

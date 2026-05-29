@@ -226,6 +226,26 @@ class JarnexTuyaCloud:
         body = {"commands": [{"code": code, "value": value}]}
         return await self._request("POST", path, json_body=body)
 
+    async def get_functions(self) -> list[dict[str, Any]]:
+        """Listet alle Functions (writable codes) mit Type + Values-Metadata."""
+        await self._ensure_token()
+        path = f"/v1.0/iot-03/devices/{self.device_id}/functions"
+        data = await self._request("GET", path)
+        result = data.get("result") or {}
+        return result.get("functions") or []
+
+    async def get_status_by_code(self) -> dict[str, Any]:
+        """Liefert alle aktuellen Code-Values (statt DP-basiert)."""
+        await self._ensure_token()
+        path = f"/v1.0/iot-03/devices/{self.device_id}/status"
+        data = await self._request("GET", path)
+        items = data.get("result") or []
+        return {item["code"]: item["value"] for item in items if isinstance(item, dict) and "code" in item}
+
+    async def set_function(self, code: str, value: Any) -> dict[str, Any]:
+        """Generischer Setter via Cloud-RPC. value-Type richtet sich nach Function-Meta."""
+        return await self._send_command(code, value)
+
     async def set_light(self, on: bool, brightness: int | None = None) -> dict[str, Any]:
         out: dict[str, Any] = {"switch": await self._send_command("switch_led", bool(on))}
         if brightness is not None:

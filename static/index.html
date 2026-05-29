@@ -122,6 +122,44 @@ pre {
   overflow-x: auto;
   font-size: 12px;
 }
+
+/* Settings Modal */
+.modal-overlay {
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); z-index: 100;
+  justify-content: center; align-items: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: #161a20; border: 1px solid #2a323a; border-radius: 8px;
+  width: 90%; max-width: 800px; max-height: 85vh; overflow-y: auto;
+  padding: 20px;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+.modal-header h2 { margin: 0; }
+.modal-close { background: none; border: 1px solid #444; color: #ccc; padding: 4px 10px; cursor: pointer; border-radius: 4px; }
+.func-section { margin-bottom: 20px; }
+.func-section h3 { margin: 10px 0 8px; color: #8ab4f8; font-size: 14px; }
+.danger-section h3 { color: #ff5252; }
+.danger-section { border: 1px solid rgba(255,82,82,0.3); padding: 10px; border-radius: 6px; background: rgba(255,82,82,0.05); }
+.func-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.func-row { background: #0e1116; padding: 8px 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.func-row.danger { background: rgba(255,82,82,0.08); }
+.func-label { font-size: 13px; color: #ddd; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.func-label small { color: var(--muted); font-size: 10px; display: block; }
+.func-control { flex-shrink: 0; }
+.func-control select, .func-control input[type=text] { background: #1a1f26; color: #fff; border: 1px solid #2a323a; padding: 3px 6px; border-radius: 3px; font-size: 12px; }
+.func-control input[type=range] { width: 100px; }
+.toggle-switch { position: relative; display: inline-block; width: 38px; height: 20px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #444; transition: .2s; border-radius: 20px; }
+.toggle-slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; transition: .2s; border-radius: 50%; }
+input:checked + .toggle-slider { background: var(--ok); }
+input:checked + .toggle-slider:before { transform: translateX(18px); }
+.slider-value { display: inline-block; min-width: 32px; text-align: right; font-size: 11px; color: var(--muted); margin-left: 4px; }
+.danger-action-btn { background: #ff5252; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+.danger-action-btn:hover { background: #c62828; }
 </style>
 </head>
 <body>
@@ -180,6 +218,17 @@ pre {
 </section>
 
 </main>
+
+<!-- Settings Modal: dynamic-rendered Functions-Panel -->
+<div id="settings-modal" class="modal-overlay" onclick="if(event.target===this) closeSettings()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="settings-title">Cam-Settings</h2>
+      <button class="modal-close" onclick="closeSettings()">Schliessen</button>
+    </div>
+    <div id="settings-body">Lade...</div>
+  </div>
+</div>
 
 <script>
 const API_BASE = window.location.pathname.replace(/\/ui\/?.*$/, '/api');
@@ -246,6 +295,7 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
           <button class="secondary" onclick="cmdSiren(${cam.id})" style="color:#ff9800">🔊 Siren</button>
           <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
+          <button class="secondary" onclick="cmdSettings(${cam.id})" title="Alle Cam-Funktionen">⚙️ Settings</button>
         </td>
       </tr>`;
     }
@@ -420,6 +470,174 @@ async function cmdCaps(camId) {
   try {
     const data = await api(`/cameras/${camId}/capabilities?refresh=true`);
     alert(JSON.stringify(data.summary, null, 2));
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+// =========================================================================
+// Settings-Modal: dynamic-rendered Functions-Panel
+// =========================================================================
+
+let currentSettingsCamId = null;
+let currentSettingsCamName = null;
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('open');
+  currentSettingsCamId = null;
+}
+
+async function cmdSettings(camId) {
+  currentSettingsCamId = camId;
+  const modal = document.getElementById('settings-modal');
+  const body = document.getElementById('settings-body');
+  const title = document.getElementById('settings-title');
+  title.textContent = `Cam ${camId} — Einstellungen`;
+  body.innerHTML = '<div class="empty-state">Lade Functions von Cam...</div>';
+  modal.classList.add('open');
+  try {
+    const data = await api(`/cameras/${camId}/functions`);
+    const cams = await api('/cameras');
+    const cam = (cams.cameras || cams || []).find(c => c.id === camId);
+    currentSettingsCamName = cam ? cam.name : `cam-${camId}`;
+    title.textContent = `${currentSettingsCamName} — ${data.count} Funktionen`;
+    body.innerHTML = renderFunctions(data.functions || []);
+  } catch (e) {
+    body.innerHTML = `<div class="empty-state" style="color:#ff5252">Fehler: ${e.message}<br><small>Settings benoetigen Cloud-API-Zugang (tuya_cloud_* in /settings).</small></div>`;
+  }
+}
+
+function renderFunctions(funcs) {
+  const dangerous = funcs.filter(f => f.dangerous);
+  const booleans = funcs.filter(f => !f.dangerous && f.type === 'Boolean');
+  const enums = funcs.filter(f => !f.dangerous && f.type === 'Enum');
+  const integers = funcs.filter(f => !f.dangerous && f.type === 'Integer');
+  const strings = funcs.filter(f => !f.dangerous && f.type === 'String');
+
+  let html = '';
+
+  if (booleans.length) {
+    html += '<div class="func-section"><h3>Boolean-Toggles (' + booleans.length + ')</h3><div class="func-grid">';
+    for (const f of booleans) html += renderBoolRow(f);
+    html += '</div></div>';
+  }
+  if (enums.length) {
+    html += '<div class="func-section"><h3>Auswahl (' + enums.length + ')</h3><div class="func-grid">';
+    for (const f of enums) html += renderEnumRow(f);
+    html += '</div></div>';
+  }
+  if (integers.length) {
+    html += '<div class="func-section"><h3>Werte (' + integers.length + ')</h3><div class="func-grid">';
+    for (const f of integers) html += renderIntegerRow(f);
+    html += '</div></div>';
+  }
+  if (strings.length) {
+    html += '<div class="func-section"><h3>Text (' + strings.length + ')</h3><div class="func-grid">';
+    for (const f of strings) html += renderStringRow(f);
+    html += '</div></div>';
+  }
+  if (dangerous.length) {
+    html += '<div class="func-section danger-section"><h3>⚠️ Gefaehrliche Aktionen (' + dangerous.length + ')</h3>';
+    html += '<div style="font-size:11px;color:#ff5252;margin-bottom:8px">Diese Aktionen sind nicht-reversibel oder unterbrechen die Cam-Funktion.</div>';
+    html += '<div class="func-grid">';
+    for (const f of dangerous) html += renderDangerRow(f);
+    html += '</div></div>';
+  }
+  return html || '<div class="empty-state">Keine Functions verfuegbar.</div>';
+}
+
+function renderBoolRow(f) {
+  const checked = f.current_value === true || f.current_value === 'true' || f.current_value === 1;
+  return `<div class="func-row">
+    <div class="func-label">${f.name}<small>${f.code}</small></div>
+    <div class="func-control">
+      <label class="toggle-switch">
+        <input type="checkbox" ${checked ? 'checked' : ''} onchange="setBooleanFunc(${f.dangerous}, '${f.code}', this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>`;
+}
+
+function renderEnumRow(f) {
+  const range = (f.values_meta && f.values_meta.range) || [];
+  const opts = range.map(v => `<option value="${v}" ${String(v) === String(f.current_value) ? 'selected' : ''}>${v}</option>`).join('');
+  return `<div class="func-row">
+    <div class="func-label">${f.name}<small>${f.code}</small></div>
+    <div class="func-control">
+      <select onchange="setFunc('${f.code}', this.value)">${opts}</select>
+    </div>
+  </div>`;
+}
+
+function renderIntegerRow(f) {
+  const meta = f.values_meta || {};
+  const min = meta.min ?? 0, max = meta.max ?? 100, step = meta.step ?? 1, unit = meta.unit || '';
+  const val = f.current_value ?? min;
+  const id = `slider-${f.code}`;
+  return `<div class="func-row">
+    <div class="func-label">${f.name}<small>${f.code} (${min}-${max}${unit})</small></div>
+    <div class="func-control">
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+        oninput="document.getElementById('${id}-val').textContent = this.value + '${unit}'"
+        onchange="setFunc('${f.code}', parseInt(this.value))">
+      <span id="${id}-val" class="slider-value">${val}${unit}</span>
+    </div>
+  </div>`;
+}
+
+function renderStringRow(f) {
+  const val = f.current_value ?? '';
+  return `<div class="func-row">
+    <div class="func-label">${f.name}<small>${f.code}</small></div>
+    <div class="func-control">
+      <input type="text" value="${val}" maxlength="${(f.values_meta && f.values_meta.maxlen) || 255}"
+        onchange="setFunc('${f.code}', this.value)">
+    </div>
+  </div>`;
+}
+
+function renderDangerRow(f) {
+  return `<div class="func-row danger">
+    <div class="func-label">${f.name}<small>${f.code}</small></div>
+    <div class="func-control">
+      <button class="danger-action-btn" onclick="triggerDangerAction('${f.code}', '${f.name}')">Ausfuehren</button>
+    </div>
+  </div>`;
+}
+
+async function setFunc(code, value) {
+  try {
+    await api(`/cameras/${currentSettingsCamId}/functions/${code}`, {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    });
+  } catch (e) { alert(`Fehler bei ${code}=${value}: ${e.message}`); }
+}
+
+async function setBooleanFunc(dangerous, code, value) {
+  // dangerous-Booleans laufen NICHT durch hier — die haben Action-Button
+  await setFunc(code, value);
+}
+
+async function triggerDangerAction(code, name) {
+  const first = confirm(
+    `GEFAEHRLICHE AKTION: "${name}" (${code})\n\n` +
+    'Diese Aktion kann nicht rueckgaengig gemacht werden ODER unterbricht die Cam.\n\n' +
+    'Trotzdem fortfahren?'
+  );
+  if (!first) return;
+  const token = prompt(
+    `Zur Bestaetigung tippe den Cam-Namen exakt ein:\n\n"${currentSettingsCamName}"`
+  );
+  if (token !== currentSettingsCamName) {
+    alert('Cam-Name stimmt nicht. Aktion abgebrochen.');
+    return;
+  }
+  try {
+    const r = await api(`/cameras/${currentSettingsCamId}/functions/${code}`, {
+      method: 'POST',
+      body: JSON.stringify({ value: true }),
+    });
+    alert(`"${name}" ausgefuehrt.\n${JSON.stringify(r.result || {}, null, 2).slice(0, 200)}`);
   } catch (e) { alert('Fehler: ' + e.message); }
 }
 
