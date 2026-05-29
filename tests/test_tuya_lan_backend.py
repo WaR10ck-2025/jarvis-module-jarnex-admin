@@ -89,9 +89,9 @@ async def test_ptz_left_with_duration_sends_stop():
     result = await backend.ptz("left", duration_s=0.01)  # kurz
     assert "move" in result
     assert "stop" in result
-    # ptz_control DP=119, Tuya-Enum: "3" = left
+    # ptz_control DP=119, Jarnex-Cam-Enum: "3" = left (PTZ_ENUM_MAP["left"])
     ptz_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 119]
-    assert ptz_calls[0][1]["value"] == "3"  # PTZ_ENUM_MAP["left"]
+    assert ptz_calls[0][1]["value"] == "3"
     # Stop kommt ueber ptz_stop (DP 151, Boolean True) ODER ptz_control "0"
     stop_calls = [
         c for c in transport.call_log

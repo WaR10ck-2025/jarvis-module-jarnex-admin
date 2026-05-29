@@ -92,14 +92,26 @@ DEFAULT_DP_MAP: dict[str, int] = {
 }
 
 # PTZ-Enum-Mapping fuer DP 119 (ptz_control).
-# Tuya-Standard-Instruction-Set: "0"=stop, "1"=top, "2"=bottom, "3"=left,
-# "4"=right, "5"=top_left, "6"=top_right, "7"=bottom_left, "8"=bottom_right
+#
+# WICHTIG: Cam-Modell-spezifische Enum-Range — vor Production-Use Functions-API
+# checken: GET /v1.0/iot-03/devices/{id}/functions -> ptz_control.values.range
+#
+# Standard-Tuya-Doku: 0=stop, 1=top, 2=bottom, 3=left, 4=right, 5=top_left,
+#   6=top_right, 7=bottom_left, 8=bottom_right
+#
+# JARNEX Ens-PL01 (live-verifiziert 2026-05-29) hat eingeschraenkte Range:
+#   ["1","2","3","5","6","7"] — KEINE "0", "4", "8"!
+#   "Pan-Right" fehlt als reiner Wert, wird ueber "6" (top_right) approximiert.
+#   Bei Pan-Only-Hardware wird die Tilt-Komponente ignoriert.
+#
+# Stop ueber dedizierten DP 151 (ptz_stop=True) statt ptz_control="0",
+# da "0" nicht in der Range ist.
 PTZ_ENUM_MAP: dict[str, str] = {
-    "stop": "0",
-    "up": "1",
-    "down": "2",
-    "left": "3",
-    "right": "4",
+    "stop": "0",     # fallback, normal via ptz_stop DP 151
+    "up": "1",       # = top
+    "down": "2",     # = bottom
+    "left": "3",     # = left (live verifiziert)
+    "right": "6",    # = top_right (live verifiziert: "4" wird abgelehnt, "6" arbeitet)
 }
 
 
