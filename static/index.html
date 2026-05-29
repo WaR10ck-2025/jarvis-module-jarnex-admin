@@ -239,6 +239,8 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdLight(${cam.id}, false)">Licht aus</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
+          <button class="secondary" onclick="cmdHomeGo(${cam.id})" title="zu Home-Position">🏠</button>
+          <button class="secondary" onclick="cmdHomeSet(${cam.id})" title="aktuelle Position als Home speichern">📍</button>
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
           <button class="secondary" onclick="cmdSiren(${cam.id})" style="color:#ff9800">🔊 Siren</button>
           <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
@@ -303,6 +305,31 @@ async function cmdLight(camId, on) {
       `Live-State: light_on=${actual_on}\n` +
       (ok ? 'OK' : 'WARNUNG: State stimmt nicht ueberein!')
     );
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdHomeSet(camId) {
+  const ok = confirm(
+    'Aktuelle Cam-Position als Home speichern?\n\n' +
+    '(Voraussetzung: vorher per ← → die gewuenschte Position anfahren)'
+  );
+  if (!ok) return;
+  try {
+    const r = await api(`/cameras/${camId}/home/set`, { method: 'POST' });
+    alert(`Home gespeichert: offset=${r.home_offset_s.toFixed(2)}s ab links-Anschlag.`);
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdHomeGo(camId) {
+  const ok = confirm(
+    'Cam zu Home-Position fahren?\n\n' +
+    'Faehrt zuerst ~10s links bis zum Hardware-Anschlag (Calibrate),\n' +
+    'dann rechts zur gespeicherten Home-Position. Dauer: 10-20s.'
+  );
+  if (!ok) return;
+  try {
+    const r = await api(`/cameras/${camId}/home/go`, { method: 'POST' });
+    alert(`Cam an Home-Position. offset=${r.home_offset_s.toFixed(2)}s`);
   } catch (e) { alert('Fehler: ' + e.message); }
 }
 

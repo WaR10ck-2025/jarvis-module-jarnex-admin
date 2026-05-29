@@ -442,7 +442,124 @@ async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e))
     except JarnexError as e:
         raise HTTPException(status_code=502, detail=f"PTZ fehlgeschlagen: {e}")
+
+    # Update pan-offset tracking (Software-side Position-Estimate fuer Home-Position).
+    # Left subtrahiert, Right addiert. Up/Down/Stop ignoriert (Pan-Only-Hardware).
+    op = (payload.op or "").lower()
+    if op in ("left", "right") and payload.duration_s > 0:
+        delta = -payload.duration_s if op == "left" else payload.duration_s
+        try:
+            current = float(get_setting(f"cam_{cam_id}_current_offset_s") or "0")
+            set_setting(f"cam_{cam_id}_current_offset_s", str(current + delta))
+        except (TypeError, ValueError):
+            pass  # offset-tracking ist fail-soft, kein Show-Stopper
+
     return {"cam_id": cam_id, "op": payload.op, "result": result}
+
+
+# ============================================================================
+# Home-Position (Software-side Pan-Offset-Tracking)
+# Pattern: Calibrate fahrt links bis Hardware-Anschlag -> Offset 0.
+# Set-Home speichert aktuellen Offset als Home-Wert.
+# Go-Home berechnet Differenz und fahrt entsprechende Direction/Duration.
+# ============================================================================
+
+
+@router.post("/cameras/{cam_id}/calibrate")
+async def calibrate_route(cam_id: int) -> dict[str, Any]:
+    """Faehrt Cam ganz nach links (10s) bis zum mechanischen Anschlag.
+    Setzt current_offset = 0 und calibrated_at = now."""
+    backend = await _get_backend(cam_id)
+    try:
+        await backend.ptz("left", duration_s=10.0)
+    except JarnexError as e:
+        raise HTTPException(status_code=502, detail=f"calibrate fehlgeschlagen: {e}")
+    set_setting(f"cam_{cam_id}_current_offset_s", "0.0")
+    set_setting(f"cam_{cam_id}_calibrated_at", str(int(asyncio.get_event_loop().time())))
+    return {
+        "cam_id": cam_id,
+        "current_offset_s": 0.0,
+        "note": "Cam ist nun am linken Hardware-Anschlag (offset=0).",
+    }
+
+
+@router.post("/cameras/{cam_id}/home/set")
+async def home_set_route(cam_id: int) -> dict[str, Any]:
+    """Speichert aktuellen current_offset_s als home_offset_s."""
+    if not get_camera(cam_id):
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    try:
+        current = float(get_setting(f"cam_{cam_id}_current_offset_s") or "0")
+    except (TypeError, ValueError):
+        current = 0.0
+    set_setting(f"cam_{cam_id}_home_offset_s", str(current))
+    return {
+        "cam_id": cam_id,
+        "home_offset_s": current,
+        "note": "Aktuelle Position als Home gespeichert.",
+    }
+
+
+@router.post("/cameras/{cam_id}/home/go")
+async def home_go_route(cam_id: int) -> dict[str, Any]:
+    """Faehrt Cam zur gespeicherten Home-Position. Strategie:
+    1. Calibrate (links-Anschlag) -> reset offset auf 0
+    2. Right fuer home_offset_s Sekunden -> Cam auf Home
+    """
+    cam = get_camera(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    home_s = get_setting(f"cam_{cam_id}_home_offset_s")
+    if not home_s:
+        raise HTTPException(
+            status_code=400,
+            detail="kein Home gesetzt. Zuerst /home/set aufrufen (Cam manuell zu Home-Pos drehen).",
+        )
+    try:
+        home_offset = float(home_s)
+    except ValueError:
+        raise HTTPException(status_code=500, detail=f"home_offset_s invalid: {home_s!r}")
+
+    backend = await _get_backend(cam_id)
+    # 1. Calibrate (10s left)
+    try:
+        await backend.ptz("left", duration_s=10.0)
+    except JarnexError as e:
+        raise HTTPException(status_code=502, detail=f"home-go calibrate fehlgeschlagen: {e}")
+    # 2. Right fuer home_offset_s
+    if home_offset > 0:
+        try:
+            await backend.ptz("right", duration_s=min(home_offset, 10.0))
+        except JarnexError as e:
+            raise HTTPException(status_code=502, detail=f"home-go right fehlgeschlagen: {e}")
+    set_setting(f"cam_{cam_id}_current_offset_s", str(home_offset))
+    return {
+        "cam_id": cam_id,
+        "home_offset_s": home_offset,
+        "note": "Cam an Home-Position gefahren.",
+    }
+
+
+@router.get("/cameras/{cam_id}/home")
+async def home_status_route(cam_id: int) -> dict[str, Any]:
+    """Status der Home-Position + Calibration."""
+    if not get_camera(cam_id):
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    try:
+        current = float(get_setting(f"cam_{cam_id}_current_offset_s") or "0")
+    except (TypeError, ValueError):
+        current = 0.0
+    home_raw = get_setting(f"cam_{cam_id}_home_offset_s")
+    home = float(home_raw) if home_raw else None
+    cal = get_setting(f"cam_{cam_id}_calibrated_at")
+    return {
+        "cam_id": cam_id,
+        "current_offset_s": current,
+        "home_offset_s": home,
+        "calibrated_at": int(cal) if cal else None,
+        "is_calibrated": cal is not None,
+        "is_home_set": home is not None,
+    }
 
 
 @router.post("/cameras/{cam_id}/light")
