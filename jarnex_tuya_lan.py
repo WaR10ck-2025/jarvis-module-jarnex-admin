@@ -258,6 +258,7 @@ class JarnexTuyaLAN:
             "brightness": dps.get(str(self._dp("brightness"))),
             "motion_armed": bool(dps.get(str(self._dp("motion_armed")))),
             "ai_person_armed": bool(dps.get(str(self._dp("ai_person_armed")))),
+            "private_mode": bool(dps.get(str(self._dp("private_mode")))),
             "raw_dps": dps,
         }
 

@@ -213,10 +213,11 @@ class JarnexTuyaCloud:
         dps_list = data.get("result") or []
         dps = {item["code"]: item["value"] for item in dps_list if isinstance(item, dict)}
         return {
-            "light_on": bool(dps.get("switch_led") or dps.get("light_switch")),
+            "light_on": bool(dps.get("switch_led") or dps.get("light_switch") or dps.get("floodlight_switch")),
             "brightness": dps.get("bright_value") or dps.get("brightness"),
             "motion_armed": bool(dps.get("motion_switch")),
-            "ai_person_armed": bool(dps.get("ai_person_switch")),
+            "ai_person_armed": bool(dps.get("ai_person_switch") or dps.get("humanoid_filter")),
+            "private_mode": bool(dps.get("basic_private")),
             "raw_codes": dps,
         }
 

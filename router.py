@@ -316,13 +316,25 @@ async def discover_host_route(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/cameras")
-async def list_cameras_route(include_summary: bool = False) -> dict[str, Any]:
+async def list_cameras_route(include_summary: bool = False, include_state: bool = False) -> dict[str, Any]:
     cams = list_cameras()
     if include_summary:
         for cam in cams:
             cap_row = list_capabilities(cam["id"]) or {}
             summary_json = cap_row.get("summary")
             cam["summary"] = caps_mod.deserialize(summary_json)
+    if include_state and cams:
+        # Parallel get_state fuer alle Cams. Exceptions werden geschluckt -
+        # state=null bedeutet "Cam-State nicht abrufbar" (z.B. offline).
+        async def _safe_get_state(cam_id: int):
+            try:
+                backend = await _get_backend(cam_id)
+                return await backend.get_state()
+            except Exception:  # noqa: BLE001
+                return None
+        states = await asyncio.gather(*[_safe_get_state(c["id"]) for c in cams])
+        for cam, st in zip(cams, states):
+            cam["state"] = st
     return {"cameras": cams, "total": len(cams)}
 
 

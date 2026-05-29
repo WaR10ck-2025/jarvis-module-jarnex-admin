@@ -160,6 +160,12 @@ input:checked + .toggle-slider:before { transform: translateX(18px); }
 .slider-value { display: inline-block; min-width: 32px; text-align: right; font-size: 11px; color: var(--muted); margin-left: 4px; }
 .danger-action-btn { background: #ff5252; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
 .danger-action-btn:hover { background: #c62828; }
+
+/* Inline-Toggle in Cam-Row (kompakt, mit Label drueber) */
+.inline-toggle { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; margin-right: 6px; vertical-align: middle; }
+.inline-toggle small { font-size: 10px; color: var(--muted); }
+.inline-toggle.on small { color: var(--ok); }
+.inline-toggle.private-on small { color: #ff9800; }
 </style>
 </head>
 <body>
@@ -266,7 +272,7 @@ async function loadHealth() {
 async function loadCameras() {
   const list = document.getElementById('cameras-list');
   try {
-    const data = await api('/cameras?include_summary=true');
+    const data = await api('/cameras?include_summary=true&include_state=true');
     if (!data.cameras.length) {
       list.innerHTML = '<div class="empty-state">Keine Cameras hinterlegt. Discovery starten und Cam hinzufuegen.</div>';
       return;
@@ -284,8 +290,10 @@ async function loadCameras() {
         <td><span class="backend-badge ${backend}">${backend}</span></td>
         <td>${stream}</td>
         <td>
-          <button class="secondary" onclick="cmdLight(${cam.id}, true)">Licht an</button>
-          <button class="secondary" onclick="cmdLight(${cam.id}, false)">Licht aus</button>
+          ${renderInlineToggle(cam.id, 'light', cam.state?.light_on, 'Licht', 'on')}
+          ${renderInlineToggle(cam.id, 'motion_switch', cam.state?.motion_armed, 'Motion', 'on')}
+          ${renderInlineToggle(cam.id, 'humanoid_filter', cam.state?.ai_person_armed, 'AI-Person', 'on')}
+          ${renderInlineToggle(cam.id, 'basic_private', cam.state?.private_mode, 'Privacy', 'private-on')}
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'left')">←</button>
           <button class="secondary" onclick="cmdPtz(${cam.id}, 'right')">→</button>
           <button class="secondary" onclick="cmdPtzStop(${cam.id})" title="Rotation sofort stoppen" style="color:#ff5252">⏹</button>
@@ -338,6 +346,45 @@ async function runDiscover() {
     results.innerHTML = html;
   } catch (e) {
     status.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+// Inline-Toggle Helper (Cam-Action-Row Quick-Switches: light/motion/ai/privacy)
+function renderInlineToggle(camId, code, value, label, activeClass) {
+  const checked = value === true || value === 'true' || value === 1;
+  const cls = checked ? activeClass : '';
+  const id = `toggle-${camId}-${code}`;
+  return `<span class="inline-toggle ${cls}" id="${id}-wrap">
+    <small>${label}</small>
+    <label class="toggle-switch">
+      <input type="checkbox" ${checked ? 'checked' : ''} onchange="setInlineToggle(${camId}, '${code}', '${activeClass}', this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+  </span>`;
+}
+
+async function setInlineToggle(camId, code, activeClass, value) {
+  const wrap = document.getElementById(`toggle-${camId}-${code}-wrap`);
+  if (wrap) wrap.style.opacity = '0.5';
+  try {
+    if (code === 'light') {
+      // Light hat eigenen Endpoint mit Brightness-Default
+      await api(`/cameras/${camId}/light`, {
+        method: 'POST',
+        body: JSON.stringify({ on: value, brightness: value ? 80 : null }),
+      });
+    } else {
+      // motion_switch, humanoid_filter, basic_private: generisch via /functions/{code}
+      await api(`/cameras/${camId}/functions/${code}`, {
+        method: 'POST',
+        body: JSON.stringify({ value }),
+      });
+    }
+    // Auto-Refresh: nach 600ms Cam-Liste neu rendern (zeigt aktuellen State)
+    setTimeout(loadCameras, 600);
+  } catch (e) {
+    if (wrap) wrap.style.opacity = '1';
+    alert(`Fehler beim Umschalten von ${code}: ${e.message}`);
   }
 }
 
