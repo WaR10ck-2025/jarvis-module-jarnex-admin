@@ -249,13 +249,12 @@ class JarnexTuyaLAN:
         # Tuya-Smart-Cam ptz_control ist Enum-String, NICHT Direction-Name.
         # PTZ_ENUM_MAP mappt 'left' -> '3' usw. (Tuya-Standard-Instruction-Set).
         if op_norm == "stop":
-            # Defensiv beide DPs setzen: manche Cams reagieren nur auf ptz_stop-Toggle.
-            result = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP["stop"])
-            try:
-                result_stop = await t.set_value(self._dp("ptz_stop"), True)
-                return {"stop": result_stop, "direction_zero": result}
-            except JarnexError:
-                return {"direction_zero": result}
+            # NUR ptz_stop-Toggle (DP 151) senden. ptz_direction="0" wird auf
+            # Jarnex Ens-PL01 REJECTED (Enum-Range hat keine "0") und Cam
+            # echo-t "8" zurueck (= bottom_right), was die Cam ggf. WEITER
+            # fahren laesst statt zu stoppen. Live-verifiziert 2026-05-29.
+            result_stop = await t.set_value(self._dp("ptz_stop"), True)
+            return {"stop": result_stop}
         result = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP[op_norm])
         if duration_s > 0:
             await asyncio.sleep(min(duration_s, 10.0))

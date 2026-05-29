@@ -79,11 +79,15 @@ async def test_ptz_stop_no_duration_sleep():
     transport = FakeTuyaTransport()
     backend = _build(transport)
     result = await backend.ptz("stop", duration_s=0.0)
-    # Stop setzt ptz_direction=0 UND ptz_stop=True (defensiv beide DPs).
-    assert "direction_zero" in result
-    # ptz_stop (DP 151) sollte True gesetzt sein
+    # Stop sendet NUR ptz_stop=True (DP 151). ptz_direction=0 wird NICHT
+    # gesendet, weil Jarnex-Cams "0" rejecten und auf "8"=bottom_right
+    # fallen lassen (Cam dreht weiter statt zu stoppen).
+    assert "stop" in result
     stop_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 151]
     assert stop_calls and stop_calls[-1][1]["value"] is True
+    # Sanity-Check: ptz_direction (DP 119) wurde NICHT gesetzt
+    direction_calls = [c for c in transport.call_log if c[0] == "set_value" and c[1]["dp"] == 119]
+    assert not direction_calls, f"ptz_direction sollte nicht gesetzt werden, aber: {direction_calls}"
 
 
 @pytest.mark.asyncio
