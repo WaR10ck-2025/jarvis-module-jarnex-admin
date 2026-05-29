@@ -436,6 +436,17 @@ async def capabilities_route(cam_id: int, refresh: bool = False) -> dict[str, An
 @router.post("/cameras/{cam_id}/ptz")
 async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
     backend = await _get_backend(cam_id)
+    op = (payload.op or "").lower()
+
+    # Bei op=stop: Cloud-RPC parallel als Hybrid-Backup. Live-verifiziert
+    # 2026-05-29 auf Jarnex Ens-PL01: LAN-DP 151 ist Status-Mirror, kein
+    # Edge-Trigger - Cloud-RPC ptz_stop=True ist robuster. Cloud feuert
+    # fire-and-forget, User wartet nicht auf Cloud-Latenz (~400ms).
+    if op == "stop" and backend.backend_id == "tuya_lan":
+        cloud_settings = _resolve_cloud_settings()
+        if cloud_settings:
+            asyncio.create_task(_cloud_ptz_stop(cam_id, cloud_settings))
+
     try:
         result = await backend.ptz(payload.op, duration_s=payload.duration_s)
     except NotImplementedError as e:
@@ -445,7 +456,6 @@ async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
 
     # Update pan-offset tracking (Software-side Position-Estimate fuer Home-Position).
     # Left subtrahiert, Right addiert. Up/Down/Stop ignoriert (Pan-Only-Hardware).
-    op = (payload.op or "").lower()
     if op in ("left", "right") and payload.duration_s > 0:
         delta = -payload.duration_s if op == "left" else payload.duration_s
         try:
@@ -455,6 +465,29 @@ async def ptz_route(cam_id: int, payload: PtzCommand) -> dict[str, Any]:
             pass  # offset-tracking ist fail-soft, kein Show-Stopper
 
     return {"cam_id": cam_id, "op": payload.op, "result": result}
+
+
+async def _cloud_ptz_stop(cam_id: int, cloud_settings: dict[str, str]) -> None:
+    """Fire-and-forget Cloud-RPC ptz_stop. Exceptions geschluckt — Best-Effort."""
+    try:
+        from jarnex_backend import select_backend
+        from jarnex_database import get_camera, get_credentials
+        cam = get_camera(cam_id)
+        if not cam:
+            return
+        cam_cloud = dict(cam)
+        cam_cloud["backend"] = "tuya_cloud"
+        cb = select_backend(
+            cam_cloud,
+            get_credentials(cam_id) or {},
+            cloud_settings=cloud_settings,
+            cloud_fallback_enabled=True,
+        )
+        await cb.login()
+        await cb.ptz("stop", duration_s=0)
+        await cb.close()
+    except Exception:  # noqa: BLE001
+        pass  # fire-and-forget; LAN-Stop ist primaerer Pfad
 
 
 # ============================================================================

@@ -237,10 +237,14 @@ class JarnexTuyaCloud:
         op_norm = (op or "").lower()
         if op_norm not in ("up", "down", "left", "right", "stop"):
             raise JarnexError(f"PTZ op muss up/down/left/right/stop sein, bekam {op!r}")
+        # Stop geht via ptz_stop=True. ptz_control="stop" wird von der Cloud
+        # mit "params range invalid" abgelehnt (Range enthaelt kein "stop").
+        if op_norm == "stop":
+            return {"stop": await self._send_command("ptz_stop", True)}
         result = await self._send_command("ptz_control", op_norm)
-        if op_norm != "stop" and duration_s > 0:
+        if duration_s > 0:
             await asyncio.sleep(min(duration_s, 10.0))
-            stop = await self._send_command("ptz_control", "stop")
+            stop = await self._send_command("ptz_stop", True)
             return {"move": result, "stop": stop}
         return {"move": result}
 
