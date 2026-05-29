@@ -91,6 +91,37 @@ DEFAULT_DP_MAP: dict[str, int] = {
     "record_switch": 116,        # record_switch (Boolean)
 }
 
+# Tuya-Cloud-Function-Code -> LAN-DP-Nummer Mapping.
+# Live-verifiziert 2026-05-29 via Status-Snapshot der Jarnex Ens-PL01.
+# Nicht alle Codes haben einen bekannten DP — fehlende landen via Cloud-RPC-Fallback.
+# Achtung: einige LAN-Sets sind State-Mirror und triggern keine Action
+# (siehe siren_switch, ptz_stop) — Hybrid-Dispatch im Router faengt das ab.
+CODE_TO_DP: dict[str, int] = {
+    # Boolean
+    "basic_indicator": 101,
+    "basic_private": 103,
+    "motion_switch": 107,
+    "record_switch": 116,
+    "ptz_stop": 151,
+    "basic_wdr": 159,
+    "ipc_auto_siren": 168,
+    "siren_switch": 134,
+    "humanoid_filter": 139,
+    "floodlight_switch": 138,
+    # Enum
+    "nightvision_mode": 106,
+    "ptz_control": 119,
+    "record_mode": 188,
+    # Integer
+    "ipc_bright": 123,
+    "basic_device_volume": 160,
+    "ipc_siren_duration": 193,
+    "ipc_siren_volume": 194,
+    "ipc_sharp": 195,
+    # String
+    "motion_area": 169,
+}
+
 # PTZ-Enum-Mapping fuer DP 119 (ptz_control).
 #
 # WICHTIG: Cam-Modell-spezifische Enum-Range — vor Production-Use Functions-API
@@ -268,6 +299,26 @@ class JarnexTuyaLAN:
                 result_stop = await t.set_value(self._dp("ptz_direction"), PTZ_ENUM_MAP["stop"])
             return {"move": result, "stop": result_stop}
         return {"move": result}
+
+    def supports_function(self, code: str) -> bool:
+        """Prueft ob ein Cloud-Function-Code via LAN-DP setzbar ist."""
+        return code in CODE_TO_DP
+
+    async def set_function(self, code: str, value: Any) -> dict[str, Any]:
+        """Generischer Setter via Code-zu-DP-Mapping.
+
+        Wirft NotImplementedError wenn Code unbekannt - Router faengt das
+        ab und delegiert auf Cloud-RPC.
+
+        Type-Coercion fuer LAN: Boolean DPs erwarten bool, Enum erwarten
+        string, Integer erwarten int. Cloud-Side kommt value als JSON,
+        wir uebergeben durch.
+        """
+        if code not in CODE_TO_DP:
+            raise NotImplementedError(f"LAN-DP-Mapping fuer code={code!r} unbekannt")
+        dp_id = CODE_TO_DP[code]
+        t = self._ensure_transport()
+        return await t.set_value(dp_id, value)
 
     async def trigger_siren(self) -> dict[str, Any]:
         """Setzt siren_switch (DP 134) auf True.

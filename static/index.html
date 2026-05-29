@@ -546,11 +546,11 @@ function renderFunctions(funcs) {
 
 function renderBoolRow(f) {
   const checked = f.current_value === true || f.current_value === 'true' || f.current_value === 1;
-  return `<div class="func-row">
+  return `<div class="func-row" data-row-code="${f.code}">
     <div class="func-label">${f.name}<small>${f.code}</small></div>
     <div class="func-control">
       <label class="toggle-switch">
-        <input type="checkbox" ${checked ? 'checked' : ''} onchange="setBooleanFunc(${f.dangerous}, '${f.code}', this.checked)">
+        <input type="checkbox" data-func-code="${f.code}" data-func-type="Boolean" ${checked ? 'checked' : ''} onchange="setBooleanFunc(${f.dangerous}, '${f.code}', this.checked)">
         <span class="toggle-slider"></span>
       </label>
     </div>
@@ -560,10 +560,10 @@ function renderBoolRow(f) {
 function renderEnumRow(f) {
   const range = (f.values_meta && f.values_meta.range) || [];
   const opts = range.map(v => `<option value="${v}" ${String(v) === String(f.current_value) ? 'selected' : ''}>${v}</option>`).join('');
-  return `<div class="func-row">
+  return `<div class="func-row" data-row-code="${f.code}">
     <div class="func-label">${f.name}<small>${f.code}</small></div>
     <div class="func-control">
-      <select onchange="setFunc('${f.code}', this.value)">${opts}</select>
+      <select data-func-code="${f.code}" data-func-type="Enum" onchange="setFunc('${f.code}', this.value)">${opts}</select>
     </div>
   </div>`;
 }
@@ -573,10 +573,10 @@ function renderIntegerRow(f) {
   const min = meta.min ?? 0, max = meta.max ?? 100, step = meta.step ?? 1, unit = meta.unit || '';
   const val = f.current_value ?? min;
   const id = `slider-${f.code}`;
-  return `<div class="func-row">
+  return `<div class="func-row" data-row-code="${f.code}">
     <div class="func-label">${f.name}<small>${f.code} (${min}-${max}${unit})</small></div>
     <div class="func-control">
-      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+      <input type="range" data-func-code="${f.code}" data-func-type="Integer" data-func-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${val}"
         oninput="document.getElementById('${id}-val').textContent = this.value + '${unit}'"
         onchange="setFunc('${f.code}', parseInt(this.value))">
       <span id="${id}-val" class="slider-value">${val}${unit}</span>
@@ -586,13 +586,160 @@ function renderIntegerRow(f) {
 
 function renderStringRow(f) {
   const val = f.current_value ?? '';
-  return `<div class="func-row">
+  // motion_area bekommt einen Canvas-Editor-Button zusaetzlich zum Text-Input
+  if (f.code === 'motion_area') {
+    return `<div class="func-row" data-row-code="${f.code}" style="grid-column: 1 / -1">
+      <div class="func-label">${f.name}<small>${f.code} (Canvas-Editor unten)</small></div>
+      <div class="func-control" style="display:flex; gap:6px">
+        <input type="text" data-func-code="${f.code}" data-func-type="String" value="${val}" maxlength="${(f.values_meta && f.values_meta.maxlen) || 255}" style="flex:1; min-width:180px"
+          onchange="setFunc('${f.code}', this.value)">
+        <button class="secondary" onclick="openMotionAreaEditor(${currentSettingsCamId})" style="padding:3px 8px">🎨 Editor</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="func-row" data-row-code="${f.code}">
     <div class="func-label">${f.name}<small>${f.code}</small></div>
     <div class="func-control">
-      <input type="text" value="${val}" maxlength="${(f.values_meta && f.values_meta.maxlen) || 255}"
+      <input type="text" data-func-code="${f.code}" data-func-type="String" value="${val}" maxlength="${(f.values_meta && f.values_meta.maxlen) || 255}"
         onchange="setFunc('${f.code}', this.value)">
     </div>
   </div>`;
+}
+
+// =========================================================================
+// Motion-Area Canvas-Editor
+// =========================================================================
+let motionAreaRects = [];  // [{x,y,w,h}] normalisierte 0-1
+let motionAreaCanvas = null;
+let motionAreaCtx = null;
+let motionAreaDrawing = false;
+let motionAreaStart = null;
+
+async function openMotionAreaEditor(camId) {
+  // Modal mit Snapshot + Canvas
+  const existing = document.getElementById('motion-area-modal');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'motion-area-modal';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+    <div class="modal" style="max-width: 720px">
+      <div class="modal-header">
+        <h2>Motion-Area Editor — Cam ${camId}</h2>
+        <button class="modal-close" onclick="document.getElementById('motion-area-modal').remove()">Schliessen</button>
+      </div>
+      <div style="margin-bottom:10px; color:#aaa; font-size:12px">
+        Klick + drag zeichnet ein Rechteck. Mehrfach klicken fuer mehrere Areas.<br>
+        Output-Format: JSON-Array von normalisierten Rechtecken [{x,y,w,h}] (0-1).<br>
+        <span style="color:#ff9800">Hinweis:</span> Falls die Cam ein anderes Format erwartet (Hex-Bitmap, ASCII-Grid), wird der Server den String ablehnen — dann manuell im Text-Input setzen.
+      </div>
+      <div style="position:relative; display:inline-block; border:1px solid #2a323a">
+        <img id="motion-area-bg" style="display:block; max-width:680px; max-height:480px" alt="Snapshot laedt...">
+        <canvas id="motion-area-canvas" style="position:absolute; top:0; left:0; cursor: crosshair"></canvas>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
+        <button class="secondary" onclick="clearMotionAreas()">Alle loeschen</button>
+        <button class="secondary" onclick="saveMotionAreas(${camId})" style="color:#4caf50">Speichern</button>
+        <span id="motion-area-count" style="color:#aaa; font-size:12px"></span>
+      </div>
+      <details style="margin-top:8px">
+        <summary style="font-size:12px; color:#888; cursor:pointer">JSON-Output Preview</summary>
+        <pre id="motion-area-json" style="font-size:11px; max-height:120px; overflow:auto">[]</pre>
+      </details>
+    </div>`;
+  document.body.appendChild(modal);
+
+  // Snapshot laden
+  const img = document.getElementById('motion-area-bg');
+  motionAreaCanvas = document.getElementById('motion-area-canvas');
+  motionAreaCtx = motionAreaCanvas.getContext('2d');
+  img.onload = () => {
+    motionAreaCanvas.width = img.clientWidth;
+    motionAreaCanvas.height = img.clientHeight;
+    motionAreaRects = [];
+    // Parse existing motion_area falls vorhanden
+    const existing = document.querySelector(`input[data-func-code="motion_area"]`)?.value || '';
+    try {
+      const parsed = JSON.parse(existing);
+      if (Array.isArray(parsed)) motionAreaRects = parsed.filter(r => typeof r === 'object' && 'x' in r);
+    } catch (e) { /* ignore */ }
+    redrawMotionAreas();
+  };
+  img.src = `${API_BASE}/cameras/${camId}/snapshot?t=${Date.now()}`;
+
+  // Mouse-Events
+  motionAreaCanvas.onmousedown = (e) => {
+    motionAreaDrawing = true;
+    const r = motionAreaCanvas.getBoundingClientRect();
+    motionAreaStart = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  motionAreaCanvas.onmousemove = (e) => {
+    if (!motionAreaDrawing) return;
+    const r = motionAreaCanvas.getBoundingClientRect();
+    const cur = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    redrawMotionAreas();
+    // Preview rect
+    const x = Math.min(motionAreaStart.x, cur.x), y = Math.min(motionAreaStart.y, cur.y);
+    const w = Math.abs(cur.x - motionAreaStart.x), h = Math.abs(cur.y - motionAreaStart.y);
+    motionAreaCtx.strokeStyle = '#ff9800';
+    motionAreaCtx.lineWidth = 2;
+    motionAreaCtx.strokeRect(x * motionAreaCanvas.width, y * motionAreaCanvas.height, w * motionAreaCanvas.width, h * motionAreaCanvas.height);
+  };
+  motionAreaCanvas.onmouseup = (e) => {
+    if (!motionAreaDrawing) return;
+    motionAreaDrawing = false;
+    const r = motionAreaCanvas.getBoundingClientRect();
+    const cur = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    const x = Math.min(motionAreaStart.x, cur.x), y = Math.min(motionAreaStart.y, cur.y);
+    const w = Math.abs(cur.x - motionAreaStart.x), h = Math.abs(cur.y - motionAreaStart.y);
+    if (w > 0.02 && h > 0.02) {
+      motionAreaRects.push({
+        x: Number(x.toFixed(3)), y: Number(y.toFixed(3)),
+        w: Number(w.toFixed(3)), h: Number(h.toFixed(3)),
+      });
+    }
+    redrawMotionAreas();
+  };
+}
+
+function redrawMotionAreas() {
+  if (!motionAreaCtx) return;
+  motionAreaCtx.clearRect(0, 0, motionAreaCanvas.width, motionAreaCanvas.height);
+  motionAreaRects.forEach((rect, i) => {
+    motionAreaCtx.strokeStyle = '#4caf50';
+    motionAreaCtx.lineWidth = 2;
+    motionAreaCtx.fillStyle = 'rgba(76, 175, 80, 0.15)';
+    const x = rect.x * motionAreaCanvas.width, y = rect.y * motionAreaCanvas.height;
+    const w = rect.w * motionAreaCanvas.width, h = rect.h * motionAreaCanvas.height;
+    motionAreaCtx.fillRect(x, y, w, h);
+    motionAreaCtx.strokeRect(x, y, w, h);
+    motionAreaCtx.fillStyle = '#4caf50';
+    motionAreaCtx.fillText(`#${i + 1}`, x + 4, y + 12);
+  });
+  document.getElementById('motion-area-count').textContent = `${motionAreaRects.length} Area(s)`;
+  document.getElementById('motion-area-json').textContent = JSON.stringify(motionAreaRects, null, 2);
+}
+
+function clearMotionAreas() {
+  motionAreaRects = [];
+  redrawMotionAreas();
+}
+
+async function saveMotionAreas(camId) {
+  const json = JSON.stringify(motionAreaRects);
+  if (json.length > 255) {
+    alert(`Output ist ${json.length} chars, max 255 erlaubt. Bitte weniger oder kleinere Areas.`);
+    return;
+  }
+  try {
+    await api(`/cameras/${camId}/functions/motion_area`, {
+      method: 'POST',
+      body: JSON.stringify({ value: json }),
+    });
+    alert(`Gespeichert: ${motionAreaRects.length} Areas\nWert: ${json}\n\nFalls Cam das Format nicht akzeptiert: in der App eine Area setzen, dann Server-Wert in /functions/status checken um echtes Format zu lernen.`);
+    document.getElementById('motion-area-modal').remove();
+    refreshSettingsValues();
+  } catch (e) { alert('Fehler: ' + e.message); }
 }
 
 function renderDangerRow(f) {
@@ -605,12 +752,56 @@ function renderDangerRow(f) {
 }
 
 async function setFunc(code, value) {
+  const row = document.querySelector(`.func-row[data-row-code="${code}"]`);
+  if (row) row.style.opacity = '0.5';
   try {
     await api(`/cameras/${currentSettingsCamId}/functions/${code}`, {
       method: 'POST',
       body: JSON.stringify({ value }),
     });
-  } catch (e) { alert(`Fehler bei ${code}=${value}: ${e.message}`); }
+    // Auto-Refresh: nach 500ms Cloud-Settle-Time die Werte erneuern
+    setTimeout(() => refreshSettingsValues(code, value), 500);
+  } catch (e) {
+    if (row) row.style.opacity = '1';
+    alert(`Fehler bei ${code}=${value}: ${e.message}`);
+  }
+}
+
+async function refreshSettingsValues(expectedCode, expectedValue) {
+  try {
+    const data = await api(`/cameras/${currentSettingsCamId}/functions/status`);
+    const values = data.values || {};
+    document.querySelectorAll('[data-func-code]').forEach(el => {
+      const code = el.dataset.funcCode;
+      const newVal = values[code];
+      if (newVal === undefined || newVal === null) return;
+      const type = el.dataset.funcType;
+      if (type === 'Boolean') {
+        el.checked = newVal === true || newVal === 'true' || newVal === 1;
+      } else if (type === 'Enum') {
+        el.value = String(newVal);
+      } else if (type === 'Integer') {
+        el.value = newVal;
+        const valSpan = document.getElementById(`slider-${code}-val`);
+        if (valSpan) valSpan.textContent = newVal + (el.dataset.funcUnit || '');
+      } else if (type === 'String') {
+        el.value = newVal;
+      }
+      // Row Opacity zurueck + Mismatch-Indikator
+      const row = document.querySelector(`.func-row[data-row-code="${code}"]`);
+      if (row) {
+        row.style.opacity = '1';
+        if (expectedCode === code && String(newVal) !== String(expectedValue)) {
+          // Server-Wert weicht ab vom angefragten Wert → kurz rot blinken
+          row.style.boxShadow = '0 0 0 2px #ff5252';
+          setTimeout(() => { row.style.boxShadow = ''; }, 1500);
+        }
+      }
+    });
+  } catch (e) {
+    // Refresh failed → alle disabled rows wieder normal
+    document.querySelectorAll('.func-row[style*="opacity"]').forEach(r => r.style.opacity = '1');
+  }
 }
 
 async function setBooleanFunc(dangerous, code, value) {

@@ -539,9 +539,47 @@ class FunctionSetCommand(BaseModel):
     value: Any = Field(description="Value matching the function's type (bool/str/int)")
 
 
+@router.get("/cameras/{cam_id}/functions/status")
+async def functions_status_route(cam_id: int) -> dict[str, Any]:
+    """Lightweight: nur aktuelle Werte aller Codes, kein Functions-Meta.
+    Schneller als /functions fuer Auto-Refresh nach Set-Operations."""
+    cb = await _get_cloud_backend(cam_id)
+    try:
+        values = await cb.get_status_by_code()
+    finally:
+        await cb.close()
+    return {"cam_id": cam_id, "values": values}
+
+
 @router.post("/cameras/{cam_id}/functions/{code}")
 async def functions_set_route(cam_id: int, code: str, payload: FunctionSetCommand) -> dict[str, Any]:
-    """Setzt eine Cam-Function via Cloud-RPC. Type-Coercion macht Cloud-API selbst."""
+    """Setzt eine Cam-Function. LAN-First, Cloud-Fallback bei unbekanntem
+    Mapping oder LAN-Error. Dangerous-Actions IMMER via Cloud (LAN-DP
+    haette ggf. anderen Effekt z.B. sd_format-DP ist unklar)."""
+    is_dangerous = code in DANGEROUS_FUNCTION_CODES
+    used_path = "cloud"
+
+    # Phase 1: LAN versuchen (schneller, kein Internet-noetig) - aber nicht bei Dangerous
+    if not is_dangerous:
+        try:
+            backend = await _get_backend(cam_id)
+            if backend.backend_id == "tuya_lan" and hasattr(backend, "supports_function") and backend.supports_function(code):
+                try:
+                    result = await backend.set_function(code, payload.value)
+                    return {
+                        "cam_id": cam_id,
+                        "code": code,
+                        "value": payload.value,
+                        "dangerous": False,
+                        "path": "lan",
+                        "result": result,
+                    }
+                except (NotImplementedError, JarnexError):
+                    pass  # Fall-through to Cloud
+        except HTTPException:
+            pass  # Backend-Setup fehlt → Cloud probieren
+
+    # Phase 2: Cloud-RPC (universal, aber braucht Internet)
     cb = await _get_cloud_backend(cam_id)
     try:
         result = await cb.set_function(code, payload.value)
@@ -553,7 +591,8 @@ async def functions_set_route(cam_id: int, code: str, payload: FunctionSetComman
         "cam_id": cam_id,
         "code": code,
         "value": payload.value,
-        "dangerous": code in DANGEROUS_FUNCTION_CODES,
+        "dangerous": is_dangerous,
+        "path": used_path,
         "result": result,
     }
 
