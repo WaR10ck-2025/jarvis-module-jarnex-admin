@@ -304,6 +304,7 @@ async function loadCameras() {
           <button class="secondary" onclick="cmdSnapshot(${cam.id})">Snap</button>
           <button class="secondary" onclick="cmdSiren(${cam.id})" style="color:#ff9800">🔊 Siren</button>
           <button class="secondary" onclick="cmdCaps(${cam.id})">Caps</button>
+          <button class="secondary" onclick="cmdSceneMode(${cam.id})" title="Scene-Modus auswaehlen (atomare 3-in-1 Operation)">🎬 Scene</button>
           <button class="secondary" onclick="cmdSettings(${cam.id})" title="Alle Cam-Funktionen">⚙️ Settings</button>
         </td>
       </tr>`;
@@ -518,6 +519,34 @@ async function cmdCaps(camId) {
   try {
     const data = await api(`/cameras/${camId}/capabilities?refresh=true`);
     alert(JSON.stringify(data.summary, null, 2));
+  } catch (e) { alert('Fehler: ' + e.message); }
+}
+
+async function cmdSceneMode(camId) {
+  const choices = [
+    { mode: 'manual_on', label: '1: Manual-ON  (Licht an + Privacy an + Tracking aus)' },
+    { mode: 'manual_on_no_privacy', label: '2: Manual-ON (kein Privacy, Licht an + Tracking aus)' },
+    { mode: 'auto_motion', label: '3: Auto-Motion (Licht aus + Privacy aus + Tracking an) [Default]' },
+    { mode: 'alarm', label: '4: Alarm (Licht an + KEIN Privacy + Tracking an)' },
+  ];
+  const promptText = 'Scene-Modus waehlen (1-4 eingeben):\n\n' +
+    choices.map(c => c.label).join('\n');
+  const choice = prompt(promptText, '1');
+  if (!choice) return;
+  const idx = parseInt(choice) - 1;
+  if (idx < 0 || idx >= choices.length) {
+    alert('Ungueltige Auswahl: ' + choice);
+    return;
+  }
+  const mode = choices[idx].mode;
+  try {
+    const r = await api(`/cameras/${camId}/scene-mode`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    });
+    const summary = r.actions.map(a => `  ${a.code}=${a.value}: ${a.ok ? 'OK (' + (a.path || 'cloud') + ')' : 'FAIL — ' + a.error}`).join('\n');
+    alert(`Scene-Mode "${mode}":\nall_ok=${r.all_ok}\n${summary}`);
+    setTimeout(loadCameras, 800);
   } catch (e) { alert('Fehler: ' + e.message); }
 }
 

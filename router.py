@@ -575,49 +575,150 @@ async def functions_status_route(cam_id: int) -> dict[str, Any]:
     return {"cam_id": cam_id, "values": values}
 
 
-@router.post("/cameras/{cam_id}/functions/{code}")
-async def functions_set_route(cam_id: int, code: str, payload: FunctionSetCommand) -> dict[str, Any]:
-    """Setzt eine Cam-Function. LAN-First, Cloud-Fallback bei unbekanntem
-    Mapping oder LAN-Error. Dangerous-Actions IMMER via Cloud (LAN-DP
-    haette ggf. anderen Effekt z.B. sd_format-DP ist unklar)."""
+async def _hybrid_set_function(cam_id: int, code: str, value: Any) -> dict[str, Any]:
+    """LAN-First, Cloud-Fallback Setter. Returns dict mit path/result, wirft
+    HTTPException bei totalem Fehlschlag. Genutzt von functions_set_route UND
+    scene_mode_route (atomare Multi-Function-Operationen).
+    Dangerous-Codes IMMER via Cloud."""
     is_dangerous = code in DANGEROUS_FUNCTION_CODES
-    used_path = "cloud"
-
-    # Phase 1: LAN versuchen (schneller, kein Internet-noetig) - aber nicht bei Dangerous
     if not is_dangerous:
         try:
             backend = await _get_backend(cam_id)
             if backend.backend_id == "tuya_lan" and hasattr(backend, "supports_function") and backend.supports_function(code):
                 try:
-                    result = await backend.set_function(code, payload.value)
-                    return {
-                        "cam_id": cam_id,
-                        "code": code,
-                        "value": payload.value,
-                        "dangerous": False,
-                        "path": "lan",
-                        "result": result,
-                    }
+                    result = await backend.set_function(code, value)
+                    return {"path": "lan", "result": result}
                 except (NotImplementedError, JarnexError):
                     pass  # Fall-through to Cloud
         except HTTPException:
-            pass  # Backend-Setup fehlt → Cloud probieren
-
-    # Phase 2: Cloud-RPC (universal, aber braucht Internet)
+            pass
     cb = await _get_cloud_backend(cam_id)
     try:
-        result = await cb.set_function(code, payload.value)
-    except JarnexError as e:
-        raise HTTPException(status_code=502, detail=f"set_function({code}={payload.value!r}) fehlgeschlagen: {e}")
+        result = await cb.set_function(code, value)
     finally:
         await cb.close()
+    return {"path": "cloud", "result": result}
+
+
+@router.post("/cameras/{cam_id}/functions/{code}")
+async def functions_set_route(cam_id: int, code: str, payload: FunctionSetCommand) -> dict[str, Any]:
+    """Setzt eine Cam-Function. LAN-First, Cloud-Fallback."""
+    try:
+        out = await _hybrid_set_function(cam_id, code, payload.value)
+    except JarnexError as e:
+        raise HTTPException(status_code=502, detail=f"set_function({code}={payload.value!r}) fehlgeschlagen: {e}")
     return {
         "cam_id": cam_id,
         "code": code,
         "value": payload.value,
-        "dangerous": is_dangerous,
-        "path": used_path,
-        "result": result,
+        "dangerous": code in DANGEROUS_FUNCTION_CODES,
+        **out,
+    }
+
+
+# ============================================================================
+# Scene-Mode: atomare Multi-Function-Operationen fuer HA-Integration
+# Pattern: HA-Automation triggert EINEN Endpoint, der intern 3 DPs setzt
+# (Light + Privacy + Motion-Tracking). Atomare All-or-Best-Effort statt
+# 3 separater HA-Calls mit Race-Risiko.
+# ============================================================================
+
+
+SCENE_MODE_ACTIONS: dict[str, list[tuple[str, Any]]] = {
+    # User unter der Lampe wird nicht aufgezeichnet, kein Auto-Pan
+    "manual_on":            [("floodlight_switch", True),  ("basic_private", True),  ("motion_tracking", False)],
+    # Licht an, aber kein Privacy (z.B. Bewohner will Aufnahme bei Anwesenheit)
+    "manual_on_no_privacy": [("floodlight_switch", True),                            ("motion_tracking", False)],
+    # Default-Modus: Cam normal, Motion-Tracking aktiv, Licht aus
+    "auto_motion":          [("floodlight_switch", False), ("basic_private", False), ("motion_tracking", True)],
+    # Alarm: Licht an, KEIN Privacy, Tracking an (alles aufzeichnen)
+    "alarm":                [("floodlight_switch", True),  ("basic_private", False), ("motion_tracking", True)],
+}
+
+
+class SceneModeCommand(BaseModel):
+    mode: str = Field(description=f"One of: {list(SCENE_MODE_ACTIONS.keys())}")
+
+
+class GroupSceneModeCommand(BaseModel):
+    cam_ids: list[int] = Field(description="Liste der Cam-IDs", min_length=1)
+    mode: str = Field(description=f"One of: {list(SCENE_MODE_ACTIONS.keys())}")
+
+
+async def _execute_scene_mode(cam_id: int, mode: str) -> dict[str, Any]:
+    """Fuehrt alle Actions des Modes nacheinander aus. Best-Effort:
+    Einzelne Fehler werden im Result protokolliert, abbruch nur bei Total-Fail."""
+    if mode not in SCENE_MODE_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"mode muss einer sein: {list(SCENE_MODE_ACTIONS.keys())}, bekam {mode!r}",
+        )
+    actions_results: list[dict[str, Any]] = []
+    all_ok = True
+    for code, value in SCENE_MODE_ACTIONS[mode]:
+        try:
+            out = await _hybrid_set_function(cam_id, code, value)
+            actions_results.append({"code": code, "value": value, "ok": True, "path": out.get("path")})
+        except (JarnexError, HTTPException, Exception) as e:  # noqa: BLE001
+            all_ok = False
+            actions_results.append({"code": code, "value": value, "ok": False, "error": str(e)})
+    return {
+        "cam_id": cam_id,
+        "mode": mode,
+        "all_ok": all_ok,
+        "actions": actions_results,
+    }
+
+
+@router.post("/cameras/{cam_id}/scene-mode")
+async def scene_mode_route(cam_id: int, payload: SceneModeCommand) -> dict[str, Any]:
+    """Atomare Scene-Operation: setzt mehrere Cam-Functions in einem Call.
+
+    Modi:
+      - manual_on: Licht an + Privacy an + Motion-Tracking aus
+        (User vor Lampe, kein Aufnehmen, kein Auto-Pan)
+      - manual_on_no_privacy: Licht an + Motion-Tracking aus
+        (Bewohner will Aufnahme erlauben)
+      - auto_motion: Licht aus + Privacy aus + Motion-Tracking an
+        (Default-Modus, Cam normal mit Auto-Pan bei Motion)
+      - alarm: Licht an + Privacy aus + Motion-Tracking an
+        (Alarm-Modus, alles aufzeichnen)
+    """
+    if not get_camera(cam_id):
+        raise HTTPException(status_code=404, detail=f"camera id={cam_id} not found")
+    return await _execute_scene_mode(cam_id, payload.mode)
+
+
+@router.post("/cameras/scene-mode")
+async def group_scene_mode_route(payload: GroupSceneModeCommand) -> dict[str, Any]:
+    """Setzt Scene-Mode parallel fuer mehrere Cams via asyncio.gather.
+    Wichtig fuer Shelly-Taster-4 (alle Cams gleichzeitig) — kein versetztes Reagieren."""
+    if payload.mode not in SCENE_MODE_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"mode muss einer sein: {list(SCENE_MODE_ACTIONS.keys())}, bekam {payload.mode!r}",
+        )
+    # Filter unbekannte Cam-IDs raus
+    valid_ids = [cid for cid in payload.cam_ids if get_camera(cid)]
+    missing = [cid for cid in payload.cam_ids if cid not in valid_ids]
+    if not valid_ids:
+        raise HTTPException(status_code=404, detail=f"keine gueltige cam_id in {payload.cam_ids}")
+    results = await asyncio.gather(
+        *[_execute_scene_mode(cid, payload.mode) for cid in valid_ids],
+        return_exceptions=True,
+    )
+    formatted = []
+    for cid, r in zip(valid_ids, results):
+        if isinstance(r, Exception):
+            formatted.append({"cam_id": cid, "mode": payload.mode, "all_ok": False, "error": str(r)})
+        else:
+            formatted.append(r)
+    return {
+        "mode": payload.mode,
+        "requested_ids": payload.cam_ids,
+        "missing_ids": missing,
+        "all_ok": all(r.get("all_ok") for r in formatted),
+        "results": formatted,
     }
 
 
