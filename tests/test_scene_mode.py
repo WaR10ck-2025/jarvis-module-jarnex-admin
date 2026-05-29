@@ -48,7 +48,7 @@ def test_scene_mode_unknown_cam(client):
 
 @pytest.mark.parametrize("mode,expected_actions", [
     ("manual_on", [("floodlight_switch", True), ("basic_private", True), ("motion_tracking", False)]),
-    ("manual_on_no_privacy", [("floodlight_switch", True), ("motion_tracking", False)]),
+    ("manual_on_no_privacy", [("floodlight_switch", True), ("basic_private", False), ("motion_tracking", False)]),
     ("auto_motion", [("floodlight_switch", False), ("basic_private", False), ("motion_tracking", True)]),
     ("alarm", [("floodlight_switch", True), ("basic_private", False), ("motion_tracking", True)]),
 ])

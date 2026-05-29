@@ -627,8 +627,8 @@ async def functions_set_route(cam_id: int, code: str, payload: FunctionSetComman
 SCENE_MODE_ACTIONS: dict[str, list[tuple[str, Any]]] = {
     # User unter der Lampe wird nicht aufgezeichnet, kein Auto-Pan
     "manual_on":            [("floodlight_switch", True),  ("basic_private", True),  ("motion_tracking", False)],
-    # Licht an, aber kein Privacy (z.B. Bewohner will Aufnahme bei Anwesenheit)
-    "manual_on_no_privacy": [("floodlight_switch", True),                            ("motion_tracking", False)],
+    # Licht an, Privacy explizit AUS (Aufnahme erlaubt), kein Auto-Pan
+    "manual_on_no_privacy": [("floodlight_switch", True),  ("basic_private", False), ("motion_tracking", False)],
     # Default-Modus: Cam normal, Motion-Tracking aktiv, Licht aus
     "auto_motion":          [("floodlight_switch", False), ("basic_private", False), ("motion_tracking", True)],
     # Alarm: Licht an, KEIN Privacy, Tracking an (alles aufzeichnen)
